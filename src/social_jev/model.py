@@ -9,12 +9,14 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
+from .evaluation import EvaluationResult, accuracy
+from .types import Request
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
     from .optim import OptimizationResult
-    from .types import Query, Request, Result
+    from .types import Query, Result
 
 
 class SocialJev:
@@ -108,6 +110,24 @@ class SocialJev:
         encoded = await asyncio.to_thread(self.processor.encode, requests)
         scores = await self.engine.aprocess(encoded.inputs)
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
+
+    def evaluate(self, *, query: Query, examples, metric=accuracy) -> EvaluationResult:
+        """Score a batch of labeled examples with probability vectors in option order."""
+        examples = list(examples)
+        if not examples:
+            msg = "Evaluation requires at least one labeled example."
+            raise ValueError(msg)
+
+        requests = [
+            Request(state=example["state"], queries=[query]) for example in examples
+        ]
+        predictions = [prediction for (prediction,) in self.query(requests)]
+        labels = [example["label"] for example in examples]
+        probabilities = [
+            [prediction.probabilities[option] for option in query.options]
+            for prediction in predictions
+        ]
+        return EvaluationResult(metric(probabilities, labels), predictions, labels)
 
     def optimize(
         self, *, query: Query, trainset, valset=None, metric=None, **kwargs
