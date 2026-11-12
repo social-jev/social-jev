@@ -69,7 +69,7 @@ Evaluate both queries against the same held-out examples with `model.evaluate()`
 Each example supplies a `state` and a zero-based `label`.
 
 ```python
-from social_jev.evaluation import f1
+from social_jev.metrics import f1
 
 for name, candidate in [("Baseline", query), ("Optimized", optimization.query)]:
     evaluation = model.evaluate(query=candidate, examples=testset, metric=f1)
