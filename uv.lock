@@ -3,20 +3,20 @@ revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'darwin'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'darwin'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'darwin'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
@@ -3071,20 +3071,20 @@ version = "2.4.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'darwin'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'darwin'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'darwin'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "python_full_version == '3.14.*' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
@@ -5441,7 +5441,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-modal = [
+compute = [
     { name = "modal" },
 ]
 vllm = [
@@ -5479,13 +5479,13 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", marker = "extra == 'vllm'" },
-    { name = "modal", marker = "extra == 'modal'" },
+    { name = "modal", marker = "extra == 'compute'" },
     { name = "pydantic", specifier = ">=2" },
     { name = "torch", specifier = ">=2.13" },
     { name = "transformers", specifier = ">=5.17,<6" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.31.0" },
 ]
-provides-extras = ["modal", "vllm"]
+provides-extras = ["compute", "vllm"]
 
 [package.metadata.requires-dev]
 benchmark = [
