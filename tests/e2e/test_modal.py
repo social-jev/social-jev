@@ -37,7 +37,7 @@ def test_rented_model_queries_and_releases_compute_on_exception(checkpoint, monk
     request = Request(state="S", queries=[Query(text="Q", options=["A", "B"])])
 
     def run():
-        with Modal(gpu="L40S"):
+        with Modal():
             model = SocialJev.from_pretrained(checkpoint, max_model_len=128)
             ready.assert_called_once_with()
             assert model.query(request)[0][0].choice == "B"

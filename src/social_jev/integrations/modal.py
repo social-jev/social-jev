@@ -37,15 +37,15 @@ class Modal:
     """Run SocialJev inference on Modal within a with block.
 
     Args:
-        gpu: Modal GPU type, with an optional count such as "H100:2".
+        gpu: Modal GPU type, defaulting to "H100". Add a count with "H100:2".
 
     Examples:
-        >>> with Modal(gpu="L40S"):  # doctest: +SKIP
+        >>> with Modal():  # doctest: +SKIP
         ...     model = SocialJev.from_pretrained(repo)
         ...     results = model.query(requests)
     """
 
-    def __init__(self, *, gpu: str):
+    def __init__(self, *, gpu: str = "H100"):
         self.gpu = gpu
         self.token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
