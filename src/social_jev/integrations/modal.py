@@ -1,4 +1,4 @@
-"""Run vLLM pooling on an ephemeral Modal GPU worker."""
+"""Run SocialJev queries on an ephemeral Modal GPU worker."""
 
 from __future__ import annotations
 
@@ -13,23 +13,24 @@ if TYPE_CHECKING:
     from contextvars import Token
     from types import TracebackType
 
+    from ..types import Request, Result
     from .context import Provider
 
 
-class ModalEngine:
-    """Forward token batches to a Modal worker and own its session."""
+class ModalClient:
+    """Forward complete queries to a Modal worker and own its session."""
 
     def __init__(self, worker: Any, session: ExitStack):
         self.worker = worker
         self.session = session
 
-    def process(self, inputs: list[list[int]]) -> list[float]:
-        return self.worker.score.remote(inputs)
+    def submit(self, requests: Request | list[Request]) -> list[list[Result]]:
+        return self.worker.run_query.remote(requests)
 
-    async def aprocess(self, inputs: list[list[int]]) -> list[float]:
-        return await self.worker.score.remote.aio(inputs)
+    async def asubmit(self, requests: Request | list[Request]) -> list[list[Result]]:
+        return await self.worker.run_query.remote.aio(requests)
 
-    def stop(self) -> None:
+    def close(self) -> None:
         self.session.close()
 
 
@@ -72,7 +73,7 @@ class Modal:
             self.token = None
             self.session = None
 
-    def start(self, repo: str, **settings: Any) -> ModalEngine:
+    def start(self, repo: str, **settings: Any) -> ModalClient:
         """Start one worker and wait for the checkpoint to load."""
         if self.token is None or self.session is not None:
             message = "Load one model per Modal context"
@@ -97,21 +98,21 @@ class Modal:
         class Worker:
             @modal.enter()
             def load(self):
-                from social_jev.vllm.offline import VllmEngine  # noqa: PLC0415
+                from social_jev import SocialJev  # noqa: PLC0415
 
-                self.engine = VllmEngine(repo, **settings)
+                self.model = SocialJev.from_pretrained(repo, backend="vllm", **settings)
 
             @modal.method()
             def ready(self):
                 """Wait for Modal to finish running the load hook."""
 
             @modal.method()
-            async def score(self, inputs: list[list[int]]) -> list[float]:
-                return await self.engine.aprocess(inputs)
+            async def run_query(self, requests):
+                return await self.model.aquery(requests)
 
             @modal.exit()
             def stop(self):
-                self.engine.stop()
+                self.model.stop()
 
         with ExitStack() as startup:
             startup.enter_context(app.run())
@@ -120,4 +121,4 @@ class Modal:
             session = startup.pop_all()
 
         self.session = session
-        return ModalEngine(worker, session)
+        return ModalClient(worker, session)

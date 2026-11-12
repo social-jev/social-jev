@@ -14,6 +14,7 @@ from .integrations.context import active_provider
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
+    from .integrations.context import RemoteClient
     from .types import Request, Result
 
 
@@ -33,10 +34,26 @@ class SocialJev:
         >>> model.stop()  # doctest: +SKIP
     """
 
-    def __init__(self, processor: Processor, engine, *, serve: bool = False):
-        self.processor = processor
+    def __init__(
+        self,
+        processor: Processor | None,
+        engine,
+        *,
+        serve: bool = False,
+        remote: RemoteClient | None = None,
+    ):
+        self.local_processor = processor
         self.engine = engine
         self.serve = serve
+        self.remote = remote
+
+    @property
+    def processor(self) -> Processor:
+        """Access request processing on the machine that loaded the model."""
+        if self.local_processor is None:
+            message = "Request processing runs on the remote worker"
+            raise AttributeError(message)
+        return self.local_processor
 
     @classmethod
     def from_pretrained(cls, repo, *, backend=None, serve=False, **kwargs):
@@ -75,11 +92,13 @@ class SocialJev:
             ... )
         """
         provider = active_provider.get()
-        default_backend = "transformers" if provider is None else "vllm"
-        backend = default_backend if backend is None else backend
-        if provider is not None and (backend != "vllm" or serve):
-            message = "Compute providers require backend='vllm' and serve=False"
-            raise ValueError(message)
+        if provider is not None:
+            if backend not in (None, "vllm") or serve:
+                message = "Compute providers require backend='vllm' and serve=False"
+                raise ValueError(message)
+            return cls(None, None, remote=provider.start(str(repo), **kwargs))
+
+        backend = "transformers" if backend is None else backend
         if backend not in {"transformers", "vllm"} or (serve and backend != "vllm"):
             message = "Choose transformers offline, vllm offline, or vllm with serve=True"
             raise ValueError(message)
@@ -90,9 +109,7 @@ class SocialJev:
             tokenizer = engine.tokenizer
         else:
             tokenizer = AutoTokenizer.from_pretrained(repo, revision=kwargs.get("revision"))
-            if provider is not None:
-                engine = provider.start(str(repo), **kwargs)
-            elif serve:
+            if serve:
                 from .vllm.server import Server  # noqa: PLC0415
 
                 engine = Server(repo, **kwargs)
@@ -105,12 +122,16 @@ class SocialJev:
 
     def query(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests synchronously; results are ordered by document, then query."""
+        if self.remote is not None:
+            return self.remote.submit(requests)
         encoded = self.processor.encode(requests)
         scores = self.engine.process(encoded.inputs)
         return self.processor.decode(scores, encoded)
 
     async def aquery(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests asynchronously with vLLM; results are ordered by document, then query."""
+        if self.remote is not None:
+            return await self.remote.asubmit(requests)
         if not hasattr(self.engine, "aprocess"):
             message = "aquery requires backend='vllm'"
             raise RuntimeError(message)
@@ -120,4 +141,7 @@ class SocialJev:
 
     def stop(self):
         """Release model resources and stop any server launched by this instance."""
-        self.engine.stop()
+        if self.remote is not None:
+            self.remote.close()
+        else:
+            self.engine.stop()
