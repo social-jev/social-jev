@@ -49,6 +49,20 @@ Transport
 Results are ordered first by document, then by query for that document. The
 probabilities above are illustrative.
 
+## Evaluation
+
+Score a query against labeled data. Labels are zero-based indices into `query.options`.
+
+```python
+evaluation = model.evaluate(
+    query=query,
+    data=[{"state": "The city added a new bus route.", "label": 0}],
+)
+print(evaluation.score)
+```
+
+See [Evaluation](docs/evaluation.md) for metrics and result fields.
+
 ## Optimization
 
 Improve an existing query and its answer options using labeled examples.

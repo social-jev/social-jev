@@ -72,7 +72,7 @@ Each example supplies a `state` and a zero-based `label`.
 from social_jev.metrics import f1
 
 for name, candidate in [("Baseline", query), ("Optimized", optimization.query)]:
-    evaluation = model.evaluate(query=candidate, examples=testset, metric=f1)
+    evaluation = model.evaluate(query=candidate, data=testset, metric=f1)
     print(f"{name}: {evaluation.score:.1%}")
 ```
 
