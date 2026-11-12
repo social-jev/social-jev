@@ -5,19 +5,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from transformers import AutoTokenizer
 
-from social_jev import Query, Request, SocialJev
+from social_jev import Query, Request, Result, SocialJev
 from social_jev.integrations import Modal
 
 
 def test_rented_model_queries_and_releases_compute_on_exception(checkpoint, monkeypatch):
     stop = Mock()
     ready = Mock()
-    submit = Mock(return_value=[0.0, 1.0])
-    submit.aio = AsyncMock(return_value=[1.0, 0.0])
+    submit = Mock(return_value=[[Result(choice="B", probabilities={"A": 0.2, "B": 0.8})]])
+    submit.aio = AsyncMock(return_value=[[Result(choice="A", probabilities={"A": 0.8, "B": 0.2})]])
     worker = SimpleNamespace(
         ready=SimpleNamespace(remote=ready),
-        score=SimpleNamespace(remote=submit),
+        run_query=SimpleNamespace(remote=submit),
     )
 
     @contextmanager
@@ -37,11 +38,15 @@ def test_rented_model_queries_and_releases_compute_on_exception(checkpoint, monk
     request = Request(state="S", queries=[Query(text="Q", options=["A", "B"])])
 
     def run():
-        with Modal():
+        with Modal(), monkeypatch.context() as local:
+            tokenizer = Mock(side_effect=AssertionError("Tokenizer loaded on the caller"))
+            local.setattr(AutoTokenizer, "from_pretrained", tokenizer)
             model = SocialJev.from_pretrained(checkpoint, max_model_len=128)
             ready.assert_called_once_with()
             assert model.query(request)[0][0].choice == "B"
             assert asyncio.run(model.aquery(request))[0][0].choice == "A"
+            submit.assert_called_once_with(request)
+            submit.aio.assert_awaited_once_with(request)
             message = "exit the rental"
             raise RuntimeError(message)
 

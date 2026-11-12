@@ -1,4 +1,4 @@
-"""Contracts for selecting a remote inference engine within a Python context."""
+"""Contracts for selecting a remote query client within a Python context."""
 
 from __future__ import annotations
 
@@ -8,15 +8,17 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from ..types import Request, Result
 
-class RemoteEngine(Protocol):
-    """Score token sequences on rented compute."""
 
-    def process(self, inputs: list[list[int]]) -> list[float]: ...
+class RemoteClient(Protocol):
+    """Send complete queries to rented compute."""
 
-    async def aprocess(self, inputs: list[list[int]]) -> list[float]: ...
+    def submit(self, requests: Request | list[Request]) -> list[list[Result]]: ...
 
-    def stop(self) -> None: ...
+    async def asubmit(self, requests: Request | list[Request]) -> list[list[Result]]: ...
+
+    def close(self) -> None: ...
 
 
 class Provider(Protocol):
@@ -24,7 +26,7 @@ class Provider(Protocol):
 
     def __enter__(self) -> Self: ...
 
-    def start(self, repo: str, **settings: Any) -> RemoteEngine: ...
+    def start(self, repo: str, **settings: Any) -> RemoteClient: ...
 
     def __exit__(
         self,
