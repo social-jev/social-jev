@@ -135,4 +135,4 @@ known_first_party = ["social_jev", "fineweb"]
 DEP004 = ["datasets", "prometheus_client"]
 
 [tool.uv.sources]
-async-gepa = { git = "ssh://git@github.com/DGoettlich/async-gepa.git", branch = "continuous-rollouts" }
+async-gepa = { git = "https://github.com/DGoettlich/async-gepa.git", branch = "continuous-rollouts" }
