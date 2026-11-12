@@ -132,8 +132,6 @@ def get_proposer_kwargs(kwargs):
         proposer_kwargs.get("reflection_lm") is not None
         or proposer_kwargs.get("reflection_strategy") is not None
     ):
-        if template is REFLECTION_PROMPT_TEMPLATE:
-            template = "Return the revised query as JSON with text and options.\n\n" + template
         proposer_kwargs["reflection_prompt_template"] = template
         return proposer_kwargs
 
