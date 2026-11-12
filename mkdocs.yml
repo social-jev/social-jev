@@ -47,4 +47,5 @@ nav:
   - Getting started: index.md
   - Concepts: concepts.md
   - Inference: inference.md
+  - Optimization: optimization.md
   - API reference: api.md
