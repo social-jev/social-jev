@@ -9,6 +9,6 @@ if __name__ == "__main__":
         queries=[Query(text="Which policy area is discussed?", options=["Transport", "Education"])],
     )
 
-    with Modal():
+    with Modal(gpu="H100"):
         model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview")
         print(model.query(request)[0][0].choice)
