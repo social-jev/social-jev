@@ -112,9 +112,9 @@ class SocialJev:
         scores = await self.engine.aprocess(encoded.inputs)
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
 
-    def evaluate(self, *, query: Query, examples, metric=accuracy) -> EvaluationResult:
+    def evaluate(self, *, query: Query, data, metric=accuracy) -> EvaluationResult:
         """Score a batch of labeled examples with probability vectors in option order."""
-        examples = list(examples)
+        examples = list(data)
         if not examples:
             msg = "Evaluation requires at least one labeled example."
             raise ValueError(msg)
