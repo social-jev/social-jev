@@ -34,6 +34,4 @@ class Provider(Protocol):
     ) -> None: ...
 
 
-active_provider: ContextVar[Provider | None] = ContextVar(
-    "social_jev_active_provider", default=None
-)
+active_provider: ContextVar[Provider | None] = ContextVar("active_provider", default=None)
