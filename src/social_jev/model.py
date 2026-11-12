@@ -9,7 +9,8 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
-from .evaluation import EvaluationResult, accuracy
+from .evaluation import EvaluationResult
+from .metrics import accuracy
 from .types import Request
 
 if TYPE_CHECKING:
