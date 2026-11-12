@@ -65,32 +65,22 @@ in option order.
 
 ## Compare the result with your baseline
 
-Evaluate the original and optimized queries on the same held-out test set
-using SocialJev's `GEPAAdapter`. The adapter runs the model and applies the
-same metric used during optimization. Here, `testset` is a list of held-out
-records with `state` and zero-based integer `label` fields.
+Evaluate both queries against the same held-out examples with `model.evaluate()`.
+Each example supplies a `state` and a zero-based `label`.
 
 ```python
-from statistics import mean
-
-from social_jev.optim import GEPAAdapter, accuracy
-
-adapter = GEPAAdapter(model=model, query=query, metric=accuracy)
+from social_jev.evaluation import f1
 
 for name, candidate in [("Baseline", query), ("Optimized", optimization.query)]:
-    evaluation = adapter.evaluate(
-        batch=testset,
-        candidate={"query": candidate.model_dump_json()},
-    )
-    print(f"{name}: {mean(evaluation.scores):.1%}")
+    evaluation = model.evaluate(query=candidate, examples=testset, metric=f1)
+    print(f"{name}: {evaluation.score:.1%}")
 ```
 
-The adapter uses the original `query` to check that each candidate preserves
-the option count. Each `candidate` supplies the text and ordered options to
-evaluate. The adapter returns one score per record. With the default
-`accuracy` metric and integer labels, the mean is test accuracy. If you
-optimized with a custom metric, pass that same callable to the adapter to
-compare scores on the same basis. Evaluation makes no reflection calls.
+The default metric is accuracy. The example uses binary F1 with the second
+option as the positive class. A custom metric receives the whole batch of
+probability vectors in query option order and the corresponding labels, and
+returns one score. The result also contains `predictions` and `labels` in
+input order.
 
 ## What happens during optimization
 
