@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = ["torch>=2.13", "transformers>=5.17,<6", "pydantic>=2"]
 
 [project.optional-dependencies]
+modal = ["modal"]
 vllm = ["vllm==0.31.0", "httpx"]
 
 [project.entry-points."vllm.general_plugins"]

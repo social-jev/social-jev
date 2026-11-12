@@ -9,6 +9,7 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
+from .integrations.context import active_provider
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -38,12 +39,13 @@ class SocialJev:
         self.serve = serve
 
     @classmethod
-    def from_pretrained(cls, repo, *, backend="transformers", serve=False, **kwargs):
+    def from_pretrained(cls, repo, *, backend=None, serve=False, **kwargs):
         """Load a checkpoint and configure its inference backend.
 
         Args:
             repo: Hugging Face model repository or local checkpoint directory.
-            backend: Inference backend: "transformers" (default) or "vllm".
+            backend: Inference backend: "transformers" or "vllm". Defaults to
+                Transformers locally and vLLM inside a compute provider context.
             serve: Launch a managed vLLM HTTP server. Requires backend="vllm".
                 Otherwise, inference runs through the local backend.
             **kwargs: Arguments forwarded to the selected backend's model loader.
@@ -72,6 +74,12 @@ class SocialJev:
             ...     repo, backend="vllm", serve=True, tensor_parallel_size=2
             ... )
         """
+        provider = active_provider.get()
+        default_backend = "transformers" if provider is None else "vllm"
+        backend = default_backend if backend is None else backend
+        if provider is not None and (backend != "vllm" or serve):
+            message = "Compute providers require backend='vllm' and serve=False"
+            raise ValueError(message)
         if backend not in {"transformers", "vllm"} or (serve and backend != "vllm"):
             message = "Choose transformers offline, vllm offline, or vllm with serve=True"
             raise ValueError(message)
@@ -82,7 +90,9 @@ class SocialJev:
             tokenizer = engine.tokenizer
         else:
             tokenizer = AutoTokenizer.from_pretrained(repo, revision=kwargs.get("revision"))
-            if serve:
+            if provider is not None:
+                engine = provider.start(str(repo), **kwargs)
+            elif serve:
                 from .vllm.server import Server  # noqa: PLC0415
 
                 engine = Server(repo, **kwargs)
