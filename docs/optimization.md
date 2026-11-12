@@ -65,27 +65,32 @@ in option order.
 
 ## Compare the result with your baseline
 
-Run both queries on the same held-out test set. For hard labels, you can
-compare their accuracy like this, using your own `testset` in the format above.
+Evaluate the original and optimized queries on the same held-out test set
+using SocialJev's `GEPAAdapter`. The adapter runs the model and applies the
+same metric used during optimization. Here, `testset` is a list of held-out
+records with `state` and zero-based integer `label` fields.
 
 ```python
 from statistics import mean
 
-from social_jev import Request
+from social_jev.optim import GEPAAdapter, accuracy
 
-def accuracy(query, examples):
-    requests = [
-        Request(state=example["state"], queries=[query]) for example in examples
-    ]
-    results = model.query(requests)
-    return mean(
-        row[0].choice == query.options[example["label"]]
-        for row, example in zip(results, examples, strict=True)
+adapter = GEPAAdapter(model=model, query=query, metric=accuracy)
+
+for name, candidate in [("Baseline", query), ("Optimized", optimization.query)]:
+    evaluation = adapter.evaluate(
+        batch=testset,
+        candidate={"query": candidate.model_dump_json()},
     )
-
-print("Baseline", accuracy(query, testset))
-print("Optimized", accuracy(optimization.query, testset))
+    print(f"{name}: {mean(evaluation.scores):.1%}")
 ```
+
+The adapter uses the original `query` to check that each candidate preserves
+the option count. Each `candidate` supplies the text and ordered options to
+evaluate. The adapter returns one score per record. With the default
+`accuracy` metric and integer labels, the mean is test accuracy. If you
+optimized with a custom metric, pass that same callable to the adapter to
+compare scores on the same basis. Evaluation makes no reflection calls.
 
 ## What happens during optimization
 
