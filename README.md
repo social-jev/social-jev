@@ -48,3 +48,28 @@ Transport
 
 Results are ordered first by document, then by query for that document. The
 probabilities above are illustrative.
+
+## Optimization
+
+Improve an existing query and its answer options using labeled examples.
+
+```bash
+uv add 'social-jev[optim]'
+```
+
+With `OPENROUTER_API_KEY` set and `model` configured for async vLLM inference:
+
+```python
+optimization = model.optimize(
+    query=query,
+    trainset=trainset,
+    valset=valset,
+    max_metric_calls=50,
+)
+
+print(optimization.query.text)
+print(optimization.query.options)
+```
+
+See [Optimization](docs/optimization.md) for
+the dataset format, how GEPA scores rewrites, and how to change the defaults.
