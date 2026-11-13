@@ -76,6 +76,29 @@ def test_rented_model_queries_and_releases_compute_on_exception(
         local.stop()
 
 
+@pytest.mark.parametrize("overrides", [False, True])
+def test_modal_forwards_worker_options(monkeypatch, overrides):
+    sdk = Mock()
+    sdk.App.return_value.run.return_value = nullcontext()
+    monkeypatch.setitem(sys.modules, "modal", sdk)
+    image = object()
+    options = {"image": image, "gpu": "H100:2", "cpu": 8, "max_inputs": 4} if overrides else {}
+
+    with Modal(**options):
+        SocialJev.from_pretrained("test/checkpoint", backend="vllm")
+
+    sdk.concurrent.assert_called_once_with(max_inputs=4 if overrides else 1)
+    worker_options = sdk.App.return_value.cls.call_args.kwargs
+    if overrides:
+        sdk.Image.debian_slim.assert_not_called()
+        assert worker_options["image"] is image
+        assert worker_options["gpu"] == "H100:2"
+        assert worker_options["cpu"] == 8
+    else:
+        sdk.Image.debian_slim.assert_called_once()
+        assert worker_options["gpu"] == "H100"
+
+
 def test_transformers_rejects_multi_gpu_before_creating_modal_app(monkeypatch):
     sdk = Mock()
     monkeypatch.setitem(sys.modules, "modal", sdk)

@@ -59,7 +59,9 @@ class Modal:
 
     Args:
         gpu: Modal GPU type, defaulting to "H100". Add a count with "H100:2".
-        max_inputs: Concurrent calls per container. Omit to use Modal's default.
+        max_inputs: Concurrent calls per container, defaulting to one.
+        **kwargs: Modal worker options such as image, cpu, memory, and timeout.
+            A custom image must include SocialJev and the selected backend.
 
     Examples:
         >>> with Modal():  # doctest: +SKIP
@@ -67,9 +69,8 @@ class Modal:
         ...     results = model.query(requests)
     """
 
-    def __init__(self, *, gpu: str = "H100", max_inputs: int | None = None):
-        self.gpu = gpu
-        self.max_inputs = max_inputs
+    def __init__(self, **kwargs: Any):
+        self.options = {"gpu": "H100", "max_inputs": 1, "max_containers": 1} | kwargs
         self.token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
 
@@ -101,7 +102,10 @@ class Modal:
             message = "Load one model per Modal context"
             raise RuntimeError(message)
 
-        if backend == "transformers" and int(self.gpu.partition(":")[2] or "1") > 1:
+        options = self.options.copy()
+        gpu = options["gpu"]
+        max_inputs = options.pop("max_inputs")
+        if backend == "transformers" and int(gpu.partition(":")[2] or "1") > 1:
             message = (
                 "Transformers on Modal uses one GPU. Request one GPU or choose "
                 'backend="vllm" and configure parallelism for your workload.'
@@ -110,23 +114,18 @@ class Modal:
 
         import modal  # noqa: PLC0415  # ty: ignore[unresolved-import] -- Optional SDK.
 
-        package = "social-jev[vllm]" if backend == "vllm" else "social-jev"
-        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-        image = modal.Image.debian_slim(python_version=python_version).pip_install(
-            f"{package}=={version('social-jev')}"
-        )
+        if "image" not in options:
+            package = "social-jev[vllm]" if backend == "vllm" else "social-jev"
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            options["image"] = modal.Image.debian_slim(python_version=python_version).pip_install(
+                f"{package}=={version('social-jev')}"
+            )
         app = modal.App("social-jev")
 
         worker_class = make_worker(modal, repo, backend, serve, settings)
-        if self.max_inputs is not None:
-            worker_class = modal.concurrent(max_inputs=self.max_inputs)(worker_class)
-        remote_worker = app.cls(
-            image=image,
-            gpu=self.gpu,
-            max_containers=1,
-            serialized=True,
-            include_source=False,
-        )(worker_class)
+        if max_inputs is not None:
+            worker_class = modal.concurrent(max_inputs=max_inputs)(worker_class)
+        remote_worker = app.cls(serialized=True, include_source=False, **options)(worker_class)
 
         with ExitStack() as startup:
             startup.enter_context(app.run())
@@ -135,7 +134,7 @@ class Modal:
             session = startup.pop_all()
 
         self.session = session
-        return ModalClient(worker, session, backend=backend, max_inputs=self.max_inputs)
+        return ModalClient(worker, session, backend=backend, max_inputs=max_inputs)
 
 
 def make_worker(modal: Any, repo: str, backend: str, serve: bool, settings: dict):  # noqa: C901 -- Register both handler variants.
