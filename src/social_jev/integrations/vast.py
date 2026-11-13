@@ -13,45 +13,14 @@ from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Self
 
-from pydantic import TypeAdapter
-
-from ..types import Request, Result
-from .context import active_provider
+from .client import HttpClient
+from .context import DEFAULT_IMAGE, active_provider
 
 if TYPE_CHECKING:
     from contextvars import Token
     from types import TracebackType
 
     from .context import Provider
-
-IMAGE = "vastai/base-image:cuda-13.2-mini-py312-2026-10-23"
-RESULTS = TypeAdapter(list[list[Result]])
-
-
-class VastClient:
-    """Submit complete requests over a private tunnel to the rented worker."""
-
-    def __init__(self, http: Any, async_http: Any, session: ExitStack, *, backend: str):
-        self.http = http
-        self.async_http = async_http
-        self.session = session
-        self.backend = backend
-
-    def submit(self, requests: Request | list[Request]) -> list[list[Result]]:
-        response = self.http.post("/query", json=request_payload(requests))
-        return RESULTS.validate_json(response.raise_for_status().content)
-
-    async def asubmit(self, requests: Request | list[Request]) -> list[list[Result]]:
-        if self.backend == "transformers":
-            message = "aquery requires backend='vllm'"
-            raise RuntimeError(message)
-        # Scope connections to this call so repeated asyncio.run() calls are safe.
-        async with self.async_http() as client:
-            response = await client.post("/query", json=request_payload(requests))
-        return RESULTS.validate_json(response.raise_for_status().content)
-
-    def close(self) -> None:
-        self.session.close()
 
 
 class VastAI:
@@ -89,7 +58,11 @@ class VastAI:
         if self.num_gpus < 1:
             message = "num_gpus must be positive"
             raise ValueError(message)
-        self.rental_options = {"image": IMAGE, "disk": 10, "cancel_unavail": True} | kwargs
+        self.rental_options: dict[str, Any] = {
+            "image": DEFAULT_IMAGE,
+            "disk": 10,
+            "cancel_unavail": True,
+        } | kwargs
         self.max_hourly_price = max_hourly_price
         self.startup_timeout = startup_timeout
         self.token: Token[Provider | None] | None = None
@@ -117,7 +90,7 @@ class VastAI:
             self.token = None
             self.session = None
 
-    def start(self, repo: str, *, backend: str, serve: bool, **settings: Any) -> VastClient:
+    def start(self, repo: str, *, backend: str, serve: bool, **settings: Any) -> HttpClient:
         """Rent one instance and wait for its SocialJev worker to load."""
         if self.token is None or self.session is not None:
             message = "Load one model per VastAI context"
@@ -152,7 +125,7 @@ class VastAI:
             session = startup.pop_all()
 
         self.session = session
-        return VastClient(http, async_http, session, backend=backend)
+        return HttpClient(http, async_http, session, backend=backend)
 
     def select_offer(self, vast: Any) -> dict:
         """Select the cheapest available offer inside the configured ceiling."""
@@ -169,12 +142,6 @@ class VastAI:
             message = "No Vast.ai offer matches the requested GPUs and hourly price ceiling"
             raise ValueError(message)
         return offers[0]
-
-
-def request_payload(requests: Request | list[Request]) -> list[dict]:
-    """Send the same wire format for a single request and a batch."""
-    items = [requests] if isinstance(requests, Request) else requests
-    return [item.model_dump(mode="json") for item in items]
 
 
 def destroy_instance(vast: Any, instance_id: int) -> None:
@@ -223,7 +190,7 @@ def connect_worker(startup: ExitStack, address, config, backend, deadline):
             "uvicorn",
         ]
     )
-    source = Path(__file__).with_name("vast_worker.py").read_text()
+    source = Path(__file__).with_name("worker.py").read_text()
     run = shlex.join(["/tmp/socialjev/bin/python", "-c", source])
     command = f"python -m venv /tmp/socialjev && {install} && exec {run}"
     with log.open("wb") as output:

@@ -5787,6 +5787,7 @@ dependencies = [
 compute = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "modal" },
     { name = "uvicorn" },
     { name = "vastai" },
@@ -5828,6 +5829,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'compute'" },
     { name = "httpx", marker = "extra == 'compute'" },
     { name = "httpx", marker = "extra == 'vllm'" },
+    { name = "huggingface-hub", marker = "extra == 'compute'", specifier = ">=1.33" },
     { name = "modal", marker = "extra == 'compute'" },
     { name = "pydantic", specifier = ">=2" },
     { name = "torch", specifier = ">=2.13" },
