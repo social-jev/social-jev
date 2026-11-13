@@ -59,7 +59,7 @@ def test_vast_runs_queries_and_destroys_rental(monkeypatch, backend, serve):
     query = Query(text="Pick a topic", options=["Transport", "Education"])
     requests = [Request(state=topic, queries=[query]) for topic in query.options]
 
-    with VastAI(max_hourly_price=1.0):
+    with VastAI():
         model = SocialJev.from_pretrained("test/model", backend=backend, serve=serve)
         check_queries(model, requests, backend, query.options)
 
@@ -67,6 +67,7 @@ def test_vast_runs_queries_and_destroys_rental(monkeypatch, backend, serve):
     remote.stop.assert_called_once_with()
     sdk.destroy_instance.assert_called_once_with(id=12)
     assert sdk.search_offers.call_args.kwargs["storage"] == 10
+    assert "dph_total<=" not in sdk.search_offers.call_args.kwargs["query"]
     assert sdk.create_instance.call_args.kwargs["disk"] == 10
 
 
@@ -79,6 +80,7 @@ def test_vast_destroys_rental_when_ssh_fails(monkeypatch):
         SocialJev.from_pretrained("test/model", backend="vllm")
     sdk.destroy_instance.assert_called_once_with(id=12)
     assert sdk.search_offers.call_args.kwargs["storage"] == 80
+    assert "dph_total<=1.0" in sdk.search_offers.call_args.kwargs["query"]
     sdk.create_instance.assert_called_once_with(
         id=5, image="custom:latest", disk=80, ssh=True, direct=True, cancel_unavail=True
     )

@@ -63,13 +63,13 @@ class VastAI:
     Args:
         gpu: Vast.ai GPU name, such as "H100_SXM".
         num_gpus: Number of GPUs on one instance.
-        max_hourly_price: Maximum advertised instance rate in USD per hour.
+        max_hourly_price: Maximum advertised instance rate in USD per hour, if supplied.
         startup_timeout: Seconds allowed for the instance and model to start.
         **kwargs: Vast instance options such as image and disk. Disk defaults
             to 10 GB and is also used to price offers.
 
     Examples:
-        >>> with VastAI(max_hourly_price=2.0):  # doctest: +SKIP
+        >>> with VastAI():  # doctest: +SKIP
         ...     model = SocialJev.from_pretrained(repo, backend="vllm")
         ...     results = model.query(requests)
     """
@@ -77,11 +77,13 @@ class VastAI:
     def __init__(
         self,
         *,
-        max_hourly_price: float,
+        max_hourly_price: float | None = None,
         startup_timeout: float = 600,
         **kwargs: Any,
     ):
-        if not math.isfinite(max_hourly_price) or max_hourly_price <= 0:
+        if max_hourly_price is not None and (
+            not math.isfinite(max_hourly_price) or max_hourly_price <= 0
+        ):
             message = "max_hourly_price must be finite and positive"
             raise ValueError(message)
         self.gpu = kwargs.pop("gpu", "H100_SXM")
@@ -156,17 +158,21 @@ class VastAI:
 
     def select_offer(self, vast: Any) -> dict:
         """Select the cheapest available offer inside the configured ceiling."""
+        query = f"gpu_name={self.gpu} num_gpus={self.num_gpus} cuda_max_good>=13.2"
+        ceiling = self.max_hourly_price
+        if ceiling is not None:
+            query += f" dph_total<={ceiling}"
         offers = vast.search_offers(
-            query=(
-                f"gpu_name={self.gpu} num_gpus={self.num_gpus} cuda_max_good>=13.2 "
-                f"dph_total<={self.max_hourly_price}"
-            ),
+            query=query,
             order="dph_total",
             limit=1,
             storage=self.rental_options["disk"],
         )
-        if not offers or offers[0]["dph_total"] > self.max_hourly_price:
-            message = "No Vast.ai offer matches the requested GPUs and hourly price ceiling"
+        if not offers:
+            message = "No Vast.ai offer matches the requested configuration"
+            raise ValueError(message)
+        if ceiling is not None and offers[0]["dph_total"] > ceiling:
+            message = "No Vast.ai offer matches the requested hourly price ceiling"
             raise ValueError(message)
         return offers[0]
 
