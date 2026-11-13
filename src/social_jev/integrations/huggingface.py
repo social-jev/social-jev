@@ -74,9 +74,9 @@ class HuggingFaceJobs:
         from huggingface_hub.utils import build_hf_headers  # noqa: PLC0415
 
         options = self.options.copy()
-        token = options.pop("token", True)
-        headers = build_hf_headers(token=token)
-        api = HfApi(token=token)
+        hf_token = options.pop("token", True)
+        headers = build_hf_headers(token=hf_token)
+        api = HfApi(token=hf_token)
         config = json.dumps(
             {"repo": repo, "backend": backend, "serve": serve, "settings": settings}
         )
