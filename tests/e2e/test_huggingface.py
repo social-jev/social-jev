@@ -64,5 +64,6 @@ def test_huggingface_job_queries_and_cancels(monkeypatch, job_stage):
     assert options["timeout"] == "1h"
     assert options["namespace"] == "org"
     assert json.loads(options["secrets"]["MODEL_CONFIG"])["repo"] == "test/model"
+    api.inspect_job.assert_called_once_with(job_id="test-job", namespace="org")
     api.cancel_job.assert_called_once_with(job_id="test-job", namespace="org")
     assert active_provider.get() is None

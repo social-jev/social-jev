@@ -11,7 +11,7 @@ from time import sleep
 from typing import TYPE_CHECKING, Any, Self
 
 from .client import HttpClient
-from .context import DEFAULT_IMAGE, active_provider
+from .context import active_provider
 
 if TYPE_CHECKING:
     from contextvars import Token
@@ -37,7 +37,7 @@ class HuggingFaceJobs:
         if kwargs.get("expose_public"):
             message = "HuggingFaceJobs requires authenticated access to its worker"
             raise ValueError(message)
-        self.options: dict[str, Any] = {"image": DEFAULT_IMAGE, "flavor": "h200"} | kwargs
+        self.options: dict[str, Any] = {"image": "python:3.12", "flavor": "h200"} | kwargs
         self.context_token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
 
@@ -114,7 +114,7 @@ def wait_for_worker(api: Any, job_id: str, namespace: str, http: Any) -> None:
     import httpx  # noqa: PLC0415 -- Optional compute dependency.
 
     while True:
-        status = api.inspect_job(job_id, namespace=namespace).status
+        status = api.inspect_job(job_id=job_id, namespace=namespace).status
         if status.stage in {"ERROR", "COMPLETED", "CANCELED", "DELETED"}:
             message = (
                 f"Hugging Face Job {job_id} ended during startup: {status.stage} {status.message}"
