@@ -66,15 +66,22 @@ def test_vast_runs_queries_and_destroys_rental(monkeypatch, backend, serve):
     load.assert_called_once_with("test/model", backend=backend, serve=serve)
     remote.stop.assert_called_once_with()
     sdk.destroy_instance.assert_called_once_with(id=12)
+    assert sdk.search_offers.call_args.kwargs["storage"] == 10
+    assert sdk.create_instance.call_args.kwargs["disk"] == 10
 
 
 def test_vast_destroys_rental_when_ssh_fails(monkeypatch):
     sdk = fake_rental(monkeypatch)
     connect = Mock(side_effect=RuntimeError("Host key verification failed"))
     monkeypatch.setattr(vast, "connect_worker", connect)
-    with VastAI(max_hourly_price=1.0), pytest.raises(RuntimeError, match="Host key verification"):
+    provider = VastAI(max_hourly_price=1.0, disk=80, image="custom:latest")
+    with provider, pytest.raises(RuntimeError, match="Host key verification"):
         SocialJev.from_pretrained("test/model", backend="vllm")
     sdk.destroy_instance.assert_called_once_with(id=12)
+    assert sdk.search_offers.call_args.kwargs["storage"] == 80
+    sdk.create_instance.assert_called_once_with(
+        id=5, image="custom:latest", disk=80, ssh=True, direct=True, cancel_unavail=True
+    )
 
 
 def fake_rental(monkeypatch):

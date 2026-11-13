@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from .context import Provider
 
 IMAGE = "vastai/base-image:cuda-13.2-mini-py312-2026-10-23"
-DISK_GB = 40
 RESULTS = TypeAdapter(list[list[Result]])
 
 
@@ -66,6 +65,8 @@ class VastAI:
         num_gpus: Number of GPUs on one instance.
         max_hourly_price: Maximum advertised instance rate in USD per hour.
         startup_timeout: Seconds allowed for the instance and model to start.
+        **kwargs: Vast instance options such as image and disk. Disk defaults
+            to 10 GB and is also used to price offers.
 
     Examples:
         >>> with VastAI(max_hourly_price=2.0):  # doctest: +SKIP
@@ -76,19 +77,19 @@ class VastAI:
     def __init__(
         self,
         *,
-        gpu: str = "H100_SXM",
-        num_gpus: int = 1,
         max_hourly_price: float,
         startup_timeout: float = 600,
+        **kwargs: Any,
     ):
         if not math.isfinite(max_hourly_price) or max_hourly_price <= 0:
             message = "max_hourly_price must be finite and positive"
             raise ValueError(message)
-        if num_gpus < 1:
+        self.gpu = kwargs.pop("gpu", "H100_SXM")
+        self.num_gpus = kwargs.pop("num_gpus", 1)
+        if self.num_gpus < 1:
             message = "num_gpus must be positive"
             raise ValueError(message)
-        self.gpu = gpu
-        self.num_gpus = num_gpus
+        self.rental_options = {"image": IMAGE, "disk": 10, "cancel_unavail": True} | kwargs
         self.max_hourly_price = max_hourly_price
         self.startup_timeout = startup_timeout
         self.token: Token[Provider | None] | None = None
@@ -139,12 +140,9 @@ class VastAI:
         with ExitStack() as startup:
             rental = vast.create_instance(
                 id=offer["id"],
-                image=IMAGE,
-                disk=DISK_GB,
                 ssh=True,
                 direct=True,
-                cancel_unavail=True,
-                label="social-jev",
+                **self.rental_options,
             )
             instance_id = rental["new_contract"]
             startup.callback(destroy_instance, vast, instance_id)
@@ -165,7 +163,7 @@ class VastAI:
             ),
             order="dph_total",
             limit=1,
-            storage=DISK_GB,
+            storage=self.rental_options["disk"],
         )
         if not offers or offers[0]["dph_total"] > self.max_hourly_price:
             message = "No Vast.ai offer matches the requested GPUs and hourly price ceiling"
