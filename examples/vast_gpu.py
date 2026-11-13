@@ -1,4 +1,4 @@
-"""Classify one document on Vast.ai with a configured API key and trusted SSH host."""
+"""Rent a GPU on Vast.ai, process requests, and destroy the instance on exit."""
 
 from social_jev import Query, Request, SocialJev
 from social_jev.integrations import VastAI
