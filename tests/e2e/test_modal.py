@@ -96,7 +96,7 @@ def test_modal_forwards_worker_options(monkeypatch, overrides):
         assert worker_options["cpu"] == 8
     else:
         sdk.Image.debian_slim.assert_called_once()
-        assert worker_options["gpu"] == "H100"
+        assert worker_options["gpu"] == "H100!"
 
 
 def test_transformers_rejects_multi_gpu_before_creating_modal_app(monkeypatch):
