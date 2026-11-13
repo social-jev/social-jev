@@ -134,7 +134,7 @@ class VastAI:
         config = json.dumps(
             {"repo": repo, "backend": backend, "serve": serve, "settings": settings}
         )
-        vast = VastSDK(raw=True)
+        vast = VastSDK()
         offer = self.select_offer(vast)
         deadline = monotonic() + self.startup_timeout
         with ExitStack() as startup:
