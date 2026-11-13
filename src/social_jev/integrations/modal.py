@@ -58,7 +58,7 @@ class Modal:
     """Run SocialJev inference on Modal within a with block.
 
     Args:
-        gpu: Modal GPU type, defaulting to "H100". Add a count with "H100:2".
+        gpu: Modal GPU type, defaulting to "H100!". Add a count with "H100:2".
         max_inputs: Concurrent calls per container, defaulting to one.
         **kwargs: Modal worker options such as image, cpu, memory, and timeout.
             A custom image must include SocialJev and the selected backend.
@@ -70,7 +70,7 @@ class Modal:
     """
 
     def __init__(self, **kwargs: Any):
-        self.options = {"gpu": "H100", "max_inputs": 1, "max_containers": 1} | kwargs
+        self.options = {"gpu": "H100!", "max_inputs": 1, "max_containers": 1} | kwargs
         self.token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
 
