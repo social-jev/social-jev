@@ -10,5 +10,5 @@ if __name__ == "__main__":
     )
 
     with Modal(gpu="H100"):
-        model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview")
+        model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview", backend="vllm")
         print(model.query(request)[0][0].choice)
