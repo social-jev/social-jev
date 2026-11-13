@@ -62,7 +62,7 @@ class SocialJev:
         Args:
             repo: Hugging Face model repository or local checkpoint directory.
             backend: Inference backend: "transformers" or "vllm". Defaults to
-                Transformers locally and vLLM inside a compute provider context.
+                Transformers.
             serve: Launch a managed vLLM HTTP server. Requires backend="vllm".
                 Otherwise, inference runs through the local backend.
             **kwargs: Arguments forwarded to the selected backend's model loader.
@@ -91,17 +91,14 @@ class SocialJev:
             ...     repo, backend="vllm", serve=True, tensor_parallel_size=2
             ... )
         """
-        provider = active_provider.get()
-        if provider is not None:
-            if backend not in (None, "vllm") or serve:
-                message = "Compute providers require backend='vllm' and serve=False"
-                raise ValueError(message)
-            return cls(None, None, remote=provider.start(str(repo), **kwargs))
-
         backend = "transformers" if backend is None else backend
         if backend not in {"transformers", "vllm"} or (serve and backend != "vllm"):
             message = "Choose transformers offline, vllm offline, or vllm with serve=True"
             raise ValueError(message)
+        provider = active_provider.get()
+        if provider is not None:
+            remote = provider.start(str(repo), backend=backend, serve=serve, **kwargs)
+            return cls(None, None, serve=serve, remote=remote)
         if backend == "transformers":
             from .transformers import TransformersEngine  # noqa: PLC0415
 
