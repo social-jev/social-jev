@@ -58,7 +58,7 @@ class Modal:
     """Run SocialJev inference on Modal within a with block.
 
     Args:
-        gpu: Modal GPU type, defaulting to "H100". Add a count with "H100:2".
+        gpu: Modal GPU type, defaulting to "H100!". Add a count with "H100:2".
         max_inputs: Concurrent calls per container, defaulting to one.
         **kwargs: Modal worker options such as image, cpu, memory, and timeout.
             A custom image must include SocialJev and the selected backend.
@@ -70,15 +70,15 @@ class Modal:
     """
 
     def __init__(self, **kwargs: Any):
-        self.options = {"gpu": "H100", "max_inputs": 1, "max_containers": 1} | kwargs
-        self.token: Token[Provider | None] | None = None
+        self.options = {"gpu": "H100!", "max_inputs": 1, "max_containers": 1} | kwargs
+        self.context_token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
 
     def __enter__(self) -> Self:
-        if self.token is not None:
+        if self.context_token is not None:
             message = "Use a separate Modal instance for each nested context"
             raise RuntimeError(message)
-        self.token = active_provider.set(self)
+        self.context_token = active_provider.set(self)
         return self
 
     def __exit__(
@@ -87,18 +87,18 @@ class Modal:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        assert self.token is not None
+        assert self.context_token is not None
         try:
             if self.session is not None:
                 self.session.__exit__(exc_type, exc, traceback)
         finally:
-            active_provider.reset(self.token)
-            self.token = None
+            active_provider.reset(self.context_token)
+            self.context_token = None
             self.session = None
 
     def start(self, repo: str, *, backend: str, serve: bool, **settings: Any) -> ModalClient:
         """Start one worker and wait for the checkpoint to load."""
-        if self.token is None or self.session is not None:
+        if self.context_token is None or self.session is not None:
             message = "Load one model per Modal context"
             raise RuntimeError(message)
 
