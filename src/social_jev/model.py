@@ -9,10 +9,12 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
+from .integrations.context import active_provider
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
+    from .integrations.context import RemoteClient
     from .types import Request, Result
 
 
@@ -32,18 +34,35 @@ class SocialJev:
         >>> model.stop()  # doctest: +SKIP
     """
 
-    def __init__(self, processor: Processor, engine, *, serve: bool = False):
-        self.processor = processor
+    def __init__(
+        self,
+        processor: Processor | None,
+        engine,
+        *,
+        serve: bool = False,
+        remote: RemoteClient | None = None,
+    ):
+        self.local_processor = processor
         self.engine = engine
         self.serve = serve
+        self.remote = remote
+
+    @property
+    def processor(self) -> Processor:
+        """Access request processing on the machine that loaded the model."""
+        if self.local_processor is None:
+            message = "Request processing runs on the remote worker"
+            raise AttributeError(message)
+        return self.local_processor
 
     @classmethod
-    def from_pretrained(cls, repo, *, backend="transformers", serve=False, **kwargs):
+    def from_pretrained(cls, repo, *, backend=None, serve=False, **kwargs):
         """Load a checkpoint and configure its inference backend.
 
         Args:
             repo: Hugging Face model repository or local checkpoint directory.
-            backend: Inference backend: "transformers" (default) or "vllm".
+            backend: Inference backend: "transformers" or "vllm". Defaults to
+                Transformers.
             serve: Launch a managed vLLM HTTP server. Requires backend="vllm".
                 Otherwise, inference runs through the local backend.
             **kwargs: Arguments forwarded to the selected backend's model loader.
@@ -72,9 +91,14 @@ class SocialJev:
             ...     repo, backend="vllm", serve=True, tensor_parallel_size=2
             ... )
         """
+        backend = "transformers" if backend is None else backend
         if backend not in {"transformers", "vllm"} or (serve and backend != "vllm"):
             message = "Choose transformers offline, vllm offline, or vllm with serve=True"
             raise ValueError(message)
+        provider = active_provider.get()
+        if provider is not None:
+            remote = provider.start(str(repo), backend=backend, serve=serve, **kwargs)
+            return cls(None, None, serve=serve, remote=remote)
         if backend == "transformers":
             from .transformers import TransformersEngine  # noqa: PLC0415
 
@@ -95,12 +119,16 @@ class SocialJev:
 
     def query(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests synchronously; results are ordered by document, then query."""
+        if self.remote is not None:
+            return self.remote.submit(requests)
         encoded = self.processor.encode(requests)
         scores = self.engine.process(encoded.inputs)
         return self.processor.decode(scores, encoded)
 
     async def aquery(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests asynchronously with vLLM; results are ordered by document, then query."""
+        if self.remote is not None:
+            return await self.remote.asubmit(requests)
         if not hasattr(self.engine, "aprocess"):
             message = "aquery requires backend='vllm'"
             raise RuntimeError(message)
@@ -110,4 +138,7 @@ class SocialJev:
 
     def stop(self):
         """Release model resources and stop any server launched by this instance."""
-        self.engine.stop()
+        if self.remote is not None:
+            self.remote.close()
+        else:
+            self.engine.stop()
