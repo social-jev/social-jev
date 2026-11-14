@@ -76,7 +76,7 @@ for name, candidate in [("Baseline", query), ("Optimized", optimization.query)]:
     print(f"{name}: {evaluation.score:.1%}")
 ```
 
-The default metric is accuracy. The example uses binary F1 with the second
+The default metric is accuracy. The example uses binary F1 with the first
 option as the positive class. A custom metric receives the whole batch of
 probability vectors in query option order and the corresponding labels, and
 returns one score. The result also contains `predictions` and `labels` in
