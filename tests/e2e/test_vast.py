@@ -17,7 +17,7 @@ from social_jev.integrations import VastAI, vast
 def test_vast_runs_queries_and_destroys_rental(monkeypatch, backend, serve):
     pytest.importorskip("uvicorn")
     testclient = pytest.importorskip("fastapi.testclient")
-    from social_jev.integrations import vast_worker  # noqa: PLC0415
+    from social_jev.integrations import worker  # noqa: PLC0415
 
     sdk = fake_rental(monkeypatch)
     active = 0
@@ -44,8 +44,8 @@ def test_vast_runs_queries_and_destroys_rental(monkeypatch, backend, serve):
 
     def connect(startup, _address, config, _backend, _deadline):
         with monkeypatch.context() as patch:
-            patch.setattr(vast_worker.SocialJev, "from_pretrained", load)
-            app = vast_worker.create_app(**json.loads(config))
+            patch.setattr(worker.SocialJev, "from_pretrained", load)
+            app = worker.create_app(**json.loads(config))
         http = startup.enter_context(testclient.TestClient(app))
 
         def async_http():
