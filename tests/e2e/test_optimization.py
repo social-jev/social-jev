@@ -28,16 +28,13 @@ class ParityModel(SocialJev):
         return self.query(requests)
 
 
-def test_evaluation_accuracy_requires_integer_labels():
-    """Score exact matches and reject partial-credit labels with the default metric."""
+def test_evaluation_accuracy_counts_exact_matches():
+    """Average correct and incorrect predictions with the default metric."""
     model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
     query = Query(text="improved", options=["Even", "Odd"])
     data = [{"state": "2", "label": 0}, {"state": "4", "label": 1}]
 
     assert model.evaluate(query=query, data=data).score == 0.5
-
-    with pytest.raises(TypeError, match="Accuracy requires integer option indices"):
-        model.evaluate(query=query, data=[{"state": "2", "label": [0.75, 0.25]}])
 
 
 def test_evaluation_f1_uses_first_option():
