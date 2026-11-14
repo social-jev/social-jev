@@ -37,3 +37,5 @@ class Provider(Protocol):
 
 
 active_provider: ContextVar[Provider | None] = ContextVar("active_provider", default=None)
+
+DEFAULT_IMAGE = "vastai/base-image:cuda-13.2-mini-py312-2026-10-23"
