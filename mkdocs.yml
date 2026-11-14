@@ -48,4 +48,6 @@ nav:
   - Getting started: index.md
   - Concepts: concepts.md
   - Inference: inference.md
+  - Evaluation: evaluation.md
+  - Optimization: optimization.md
   - API reference: api.md

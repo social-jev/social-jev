@@ -9,11 +9,15 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
+from .evaluation import EvaluationResult
+from .metrics import accuracy
+from .types import Request
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-    from .types import Request, Result
+    from .optim import OptimizationResult
+    from .types import Query, Result
 
 
 class SocialJev:
@@ -107,6 +111,58 @@ class SocialJev:
         encoded = await asyncio.to_thread(self.processor.encode, requests)
         scores = await self.engine.aprocess(encoded.inputs)
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
+
+    def evaluate(self, *, query: Query, data, metric=accuracy) -> EvaluationResult:
+        """Score a batch of labeled examples with probability vectors in option order."""
+        examples = list(data)
+        if not examples:
+            msg = "Evaluation requires at least one labeled example."
+            raise ValueError(msg)
+
+        requests = [Request(state=example["state"], queries=[query]) for example in examples]
+        predictions = [prediction for (prediction,) in self.query(requests)]
+        labels = [example["label"] for example in examples]
+        probabilities = [
+            [prediction.probabilities[option] for option in query.options]
+            for prediction in predictions
+        ]
+        return EvaluationResult(metric(probabilities, labels), predictions, labels)
+
+    def optimize(
+        self, *, query: Query, trainset, valset=None, metric=None, **kwargs
+    ) -> OptimizationResult:
+        """Optimize a query and its options against labeled examples using AsyncGEPA.
+
+        Pass GEPA lists or data loaders as trainset and valset. Continuous rollouts
+        are enabled by default and use the async vLLM backend. Other optimizer
+        arguments, including the sampling strategy and budget, go to AsyncGEPA.
+        """
+        from async_gepa import optimize  # noqa: PLC0415  # ty: ignore[unresolved-import]
+
+        from social_jev.optim import (  # noqa: PLC0415
+            GEPAAdapter,
+            OptimizationResult,
+            accuracy,
+            get_proposer_kwargs,
+            get_scheduler_kwargs,
+        )
+
+        adapter = GEPAAdapter(self, query, accuracy if metric is None else metric)
+        scheduler_kwargs = get_scheduler_kwargs(kwargs)
+        proposer_kwargs = get_proposer_kwargs(kwargs)
+        result = optimize(
+            seed_candidate={"query": query.model_dump_json()},
+            trainset=trainset,
+            valset=valset,
+            adapter=adapter,
+            **scheduler_kwargs,
+            **proposer_kwargs,
+            **kwargs,
+        )
+        return OptimizationResult(
+            query=adapter.candidate_query(result.candidates[result.best_idx]),
+            result=result,
+        )
 
     def stop(self):
         """Release model resources and stop any server launched by this instance."""

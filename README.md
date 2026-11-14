@@ -48,3 +48,42 @@ Transport
 
 Results are ordered first by document, then by query for that document. The
 probabilities above are illustrative.
+
+## Evaluation
+
+Score a query against labeled data. Labels are zero-based indices into `query.options`.
+
+```python
+evaluation = model.evaluate(
+    query=query,
+    data=[{"state": "The city added a new bus route.", "label": 0}],
+)
+print(evaluation.score)
+```
+
+See [Evaluation](docs/evaluation.md) for metrics and result fields.
+
+## Optimization
+
+Improve an existing query and its answer options using labeled examples.
+
+```bash
+uv add 'social-jev[optim]'
+```
+
+With `OPENROUTER_API_KEY` set and `model` configured for async vLLM inference:
+
+```python
+optimization = model.optimize(
+    query=query,
+    trainset=trainset,
+    valset=valset,
+    max_metric_calls=50,
+)
+
+print(optimization.query.text)
+print(optimization.query.options)
+```
+
+See [Optimization](docs/optimization.md) for
+the dataset format, how GEPA scores rewrites, and how to change the defaults.
