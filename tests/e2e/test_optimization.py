@@ -7,12 +7,7 @@ import httpx
 import pytest
 
 from social_jev import Query, Result, SocialJev
-
-pytestmark = pytest.mark.skipif(
-    find_spec("async_gepa") is None,
-    reason="Install the optim extra to exercise AsyncGEPA",
-)
-
+from social_jev.metrics import f1
 
 class ParityModel(SocialJev):
     """Score the test query without loading a checkpoint."""
@@ -32,6 +27,24 @@ class ParityModel(SocialJev):
         return self.query(requests)
 
 
+def test_evaluation_f1_uses_first_option():
+    """Distinguish first-option and second-option F1 on asymmetric predictions."""
+    model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
+    query = Query(text="improved", options=["Even", "Odd"])
+    data = [
+        {"state": "0", "label": 0},
+        {"state": "2", "label": 1},
+        {"state": "1", "label": 1},
+        {"state": "3", "label": 1},
+    ]
+
+    assert model.evaluate(query=query, data=data, metric=f1).score == pytest.approx(2 / 3)
+
+
+@pytest.mark.skipif(
+    find_spec("async_gepa") is None,
+    reason="Install the optim extra to exercise AsyncGEPA",
+)
 @pytest.mark.parametrize("continuous", [True, False])
 def test_optimization_returns_the_winning_query_and_scores(monkeypatch, continuous):
     """Retry an invalid default rewrite and accept a valid rewrite through either loop."""
