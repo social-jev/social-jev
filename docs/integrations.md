@@ -1,8 +1,10 @@
 # Rented GPUs
 
-SocialJev runs inference on Modal, Hugging Face Jobs, or Vast.ai through a provider context. `SocialJev.from_pretrained()` starts the remote worker and loads the model there. The worker tokenizes requests, runs inference, and returns the results to your script. The calling script loads the dataset and handles saving or uploading results. Exiting the context releases the worker.
+The compute integration lets a Python script run SocialJev inference on a rented GPU through Modal, Hugging Face Jobs, or Vast.ai. Your script sends requests to the rented worker and receives the results, so it can load its dataset and save or upload predictions as usual. Within the provider context, `SocialJev.from_pretrained()` starts the worker and loads the model on it. Exiting the context releases the worker.
 
 ## Setup
+
+The `compute` extra installs the provider clients in the environment that runs your script. Each provider has its own setup for authenticating that client.
 
 ```bash
 # Works with Transformers and vLLM on the remote GPU
@@ -22,6 +24,8 @@ uv pip install 'social-jev[compute]'
 The local client needs a Vast API key and an SSH key registered with Vast. [Vast API and SSH setup](https://github.com/vast-ai/docs/blob/main/api-reference/openapi.yaml)
 
 ## Run inference
+
+This example loads the model on a Modal H100 and submits one request with `model.query()`. The script receives the results before the context exits and prints the first answer after the worker stops.
 
 ```python
 from social_jev import Query, Request, SocialJev
@@ -48,7 +52,7 @@ The same query code works with `HuggingFaceJobs()` or `VastAI()`. With vLLM, `aq
 
 ## Environment variables and secrets
 
-If the remote worker needs access to a private model, it needs a token with permission to download it.
+A remote worker needs a download token to load a private model. The provider settings below show how to put that token in the worker's environment as `HF_TOKEN`.
 
 **Modal** can attach a workspace secret named `hub-access` that contains `HF_TOKEN`. [Modal secrets](https://modal.com/docs/guide/secrets)
 

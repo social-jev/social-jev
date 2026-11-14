@@ -1,8 +1,10 @@
 # Optimization
 
-`model.optimize()` searches for wording that improves SocialJev's predictions on a labeled task. AsyncGEPA proposes rewrites of the query and its answer options. The class at each option index keeps its meaning, so the same labels apply throughout the search.
+`model.optimize()` searches for wording that improves SocialJev's predictions on a labeled task. AsyncGEPA runs the search. A reflection model proposes new wording for the query and its answer options, and SocialJev's predictions are scored against reference labels to compare candidates. Each option keeps its meaning and position, so the same reference labels apply throughout.
 
 ## Optimize a query
+
+This example runs SocialJev on vLLM to make predictions for each candidate. GLM-5.3 Flash, accessed through OpenRouter, proposes rewrites. The default reflector requires `OPENROUTER_API_KEY` in the environment.
 
 ```bash
 uv pip install 'social-jev[optim,vllm]'
@@ -11,7 +13,7 @@ uv pip install 'social-jev[optim,vllm]'
 !!! important
     The default asynchronous optimization loop requires vLLM. Standard synchronous GEPA works with Transformers using `social-jev[optim]`. See [Customizing optimization](#customizing-optimization) for the synchronous loop.
 
-The default OpenRouter reflector requires `OPENROUTER_API_KEY` in the environment. An optional `explanation` gives the reflector context for a reference label.
+The search uses training examples to propose rewrites and validation examples to compare them. After the search, the script scores the original and selected queries on the same held-out test set. A training record can include an `explanation` for the reflection model, as in the example where the author and the mayor take different positions.
 
 ```python
 from social_jev import Query, SocialJev
@@ -52,7 +54,7 @@ finally:
     model.stop()
 ```
 
-The training set supplies examples for proposing rewrites. The validation set is used to compare candidates, and the held-out test set compares the selected query with the original. `max_metric_calls` limits how many candidate-example evaluations the search can run. Reflection requests are separate.
+The `max_metric_calls` budget counts each candidate scored on one example as one evaluation. That budget applies only to candidate scoring.
 
 ## Customizing optimization
 
@@ -60,13 +62,13 @@ Keyword arguments on `model.optimize()` configure the search. SocialJev uses the
 
 ### Reflection
 
-The default reflector uses OpenRouter. A supported provider/model string or a compatible GEPA language-model object supplied as `reflection_lm` replaces that default. A `reflection_strategy` can implement reflection using any model or service it can call, including a local model. These alternatives use their own credentials and work without `OPENROUTER_API_KEY`.
+GLM-5.3 Flash proposes rewrites by default, with requests routed through OpenRouter. A supported provider/model string or a compatible GEPA language-model object supplied as `reflection_lm` replaces that default. A `reflection_strategy` can implement reflection using any model or service it can call, including a local model. These alternatives use their own credentials and work without `OPENROUTER_API_KEY`.
 
 For example, `reflection_lm="openai/gpt-5.1"` uses OpenAI credentials. `reflection_strategy=my_reflection_strategy` uses the supplied strategy. `custom_candidate_proposer` can replace the proposal step directly.
 
 ### Scheduling and sampling
 
-Continuous rollouts can start new evaluations as others finish, including while reflection is in progress. `max_in_flight_rollouts=16` limits concurrent evaluations.
+The scheduler determines when evaluations start. The sampler selects which existing candidates and training examples to use for new proposals. With continuous rollouts, the default scheduler can start new evaluations as others finish, including while reflection is in progress. `max_in_flight_rollouts=16` limits concurrent evaluations.
 
 Batched GEPA uses `scheduler=None` and `sampling_strategy=IndependentSampling(4)` to select four parent-and-minibatch pairs per iteration. The sampler comes from `async_gepa.strategies.proposal_sampling`.
 

@@ -4,6 +4,8 @@
 
 ## Evaluate a query
 
+This example evaluates whether SocialJev can identify support for expanding bus service. Each record pairs a passage with its reference answer. The labels are zero-based indices into the query's options, so `0` means `Supports` and `1` means `Opposes`.
+
 ```python
 from social_jev import Query, SocialJev
 
@@ -22,11 +24,13 @@ print(evaluation.score)
 print(evaluation.predictions[0].choice)
 ```
 
-An integer label is a zero-based option index. A distribution label such as `[0.75, 0.25]` gives one reference weight per option in the same order.
-
 ## Default metrics
 
-Accuracy gives each prediction one point when its highest-probability option matches the integer label. For a distribution label, it gives the prediction the reference weight at the selected index.
+SocialJev ships two built-in metrics, accuracy and binary F1. By default, `model.evaluate()` reports accuracy. With integer labels, this is the fraction of documents for which the model's top choice matches the reference answer.
+
+Reference labels can also give partial credit. With `label=[0.75, 0.25]`, a prediction of `Supports` earns 0.75 and a prediction of `Opposes` earns 0.25. Accuracy averages the credit earned across documents.
+
+Binary F1 combines precision and recall for the first option. In this example, precision is the fraction of predicted `Supports` answers that are correct, and recall is the fraction of reference `Supports` answers the model predicts correctly. Binary F1 uses integer labels and is selected by passing `metric=f1`.
 
 ```python
 from social_jev.metrics import f1
@@ -34,7 +38,7 @@ from social_jev.metrics import f1
 evaluation = model.evaluate(query=query, data=examples, metric=f1)
 ```
 
-Binary F1 accepts integer labels and treats the first option as positive. With the options above, predicting `Supports` for a document labeled `Opposes` is a false positive. Predicting `Opposes` for a document labeled `Supports` is a false negative. To count `Opposes` as positive, put it first and remap the labels, or pass a custom metric that treats index `1` as positive.
+To count `Opposes` as positive, put it first and remap the labels, or pass a custom metric that treats index `1` as positive.
 
 ## API reference
 
@@ -44,7 +48,7 @@ Binary F1 accepts integer labels and treats the first option as positive. With t
 - `data` supplies records with `state` and `label`.
 - `metric` returns one float or integer score for the batch.
 
-`predictions[i][j]` is the predicted probability of `query.options[j]` for document `i`, and `labels[i]` is that document's reference label. For instance, `predictions[0][1]` is the first document's probability of `Opposes`, while `labels[0] = 0` means its reference answer is `Supports`.
+`predictions[i][j]` is the predicted probability of `query.options[j]` for document `i`, and `labels[i]` is that document's reference label. For instance, `predictions[0][1]` is the probability the model assigns to `Opposes` for the first document, and a value of `0` in `labels[0]` means the reference answer is `Supports`.
 
 ```python
 from social_jev.evaluation import Label
