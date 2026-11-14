@@ -119,9 +119,7 @@ class SocialJev:
             msg = "Evaluation requires at least one labeled example."
             raise ValueError(msg)
 
-        requests = [
-            Request(state=example["state"], queries=[query]) for example in examples
-        ]
+        requests = [Request(state=example["state"], queries=[query]) for example in examples]
         predictions = [prediction for (prediction,) in self.query(requests)]
         labels = [example["label"] for example in examples]
         probabilities = [

@@ -2,8 +2,7 @@
 
 Use `model.evaluate()` to score a query on labeled data. Each record contains
 a `state` and a `label`. Integer labels are zero-based indices into the query's
-options. Distribution labels give one target probability per option, in the
-same order.
+options.
 
 ```python
 from social_jev import Query
@@ -25,7 +24,8 @@ print(evaluation.score)
 ```
 
 SocialJev ships `accuracy` and binary `f1` in `social_jev.metrics`. Evaluation
-defaults to accuracy. Pass any callable as `metric=` that takes the batch of
+defaults to accuracy, the fraction of predictions that match the integer
+reference label. Pass a custom callable as `metric=` that takes the batch of
 predicted probability vectors in query option order and the corresponding
 labels, and returns a scalar score. Binary F1 treats option index `0` as positive.
 

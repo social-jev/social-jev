@@ -4,11 +4,14 @@ from .evaluation import Label
 
 
 def accuracy(predictions: list[list[float]], labels: list[Label]) -> float:
-    """Average credit for the highest-probability option."""
+    """Return the fraction of top choices that match integer reference labels."""
     total = 0.0
     for probabilities, label in zip(predictions, labels, strict=True):
         choice = max(range(len(probabilities)), key=probabilities.__getitem__)
-        total += float(choice == label) if isinstance(label, int) else label[choice]
+        if not isinstance(label, int):
+            msg = "Accuracy requires integer option indices as labels."
+            raise TypeError(msg)
+        total += float(choice == label)
     return total / len(labels)
 
 
