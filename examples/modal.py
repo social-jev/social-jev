@@ -1,4 +1,4 @@
-"""Run one query on Modal with social-jev[compute] and a configured Modal account."""
+"""Run one query on Modal with `uv run --extra compute -m examples.modal`."""
 
 from social_jev import Query, Request, SocialJev
 from social_jev.integrations import Modal
