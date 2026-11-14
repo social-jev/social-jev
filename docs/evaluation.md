@@ -50,8 +50,7 @@ Binary F1 accepts integer labels and treats the first option as positive. With t
 from social_jev.evaluation import Label
 
 
-def my_metric(predictions: list[list[float]], labels: list[Label]) -> float | int:
-    ...
+def my_metric(predictions: list[list[float]], labels: list[Label]) -> float | int: ...
 
 
 evaluation = model.evaluate(query=query, data=examples, metric=my_metric)

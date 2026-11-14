@@ -38,9 +38,7 @@ request = Request(
 )
 
 with Modal(gpu="H100!"):
-    model = SocialJev.from_pretrained(
-        "social-jev/social-jev-0.6B-preview", backend="vllm"
-    )
+    model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview", backend="vllm")
     results = model.query(request)
 
 print(results[0][0].choice)

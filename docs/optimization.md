@@ -16,9 +16,7 @@ The default OpenRouter reflector requires `OPENROUTER_API_KEY` in the environmen
 ```python
 from social_jev import Query, SocialJev
 
-model = SocialJev.from_pretrained(
-    "social-jev/social-jev-0.6B-preview", backend="vllm", serve=True
-)
+model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview", backend="vllm", serve=True)
 query = Query(
     text="Does the author support expanding bus service?",
     options=["Supports", "Opposes"],
@@ -77,7 +75,10 @@ Classic GEPA uses `scheduler=None` with the default single-proposal sampler. Bot
 ```python
 model = SocialJev.from_pretrained("social-jev/social-jev-0.6B-preview")
 optimization = model.optimize(
-    query=query, trainset=trainset, valset=valset, max_metric_calls=50,
+    query=query,
+    trainset=trainset,
+    valset=valset,
+    max_metric_calls=50,
     scheduler=None,
 )
 ```
@@ -97,12 +98,14 @@ from social_jev.evaluation import Label
 def my_metric(
     predictions: list[list[float]],
     labels: list[Label],
-) -> tuple[list[float], str | None]:
-    ...
+) -> tuple[list[float], str | None]: ...
 
 
 optimization = model.optimize(
-    query=query, trainset=trainset, valset=valset, max_metric_calls=50,
+    query=query,
+    trainset=trainset,
+    valset=valset,
+    max_metric_calls=50,
     metric=my_metric,
 )
 ```
