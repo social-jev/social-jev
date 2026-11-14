@@ -26,9 +26,7 @@ print(evaluation.predictions[0].choice)
 
 ## Default metrics
 
-SocialJev ships two built-in metrics, accuracy and binary F1. By default, `model.evaluate()` reports accuracy. With integer labels, this is the fraction of documents for which the model's top choice matches the reference answer.
-
-Reference labels can also give partial credit. With `label=[0.75, 0.25]`, a prediction of `Supports` earns 0.75 and a prediction of `Opposes` earns 0.25. Accuracy averages the credit earned across documents.
+SocialJev ships two built-in metrics, accuracy and binary F1. By default, `model.evaluate()` reports accuracy. Accuracy is the fraction of documents where the model's top choice matches the reference label. The label is the zero-based index of the correct option.
 
 Binary F1 combines precision and recall for the first option. In this example, precision is the fraction of predicted `Supports` answers that are correct, and recall is the fraction of reference `Supports` answers the model predicts correctly. Binary F1 uses integer labels and is selected by passing `metric=f1`.
 
@@ -46,7 +44,7 @@ To count `Opposes` as positive, put it first and remap the labels, or pass a cus
 
 - `query` is the query with answer options applied to every document.
 - `data` supplies records with `state` and `label`.
-- `metric` returns one float or integer score for the batch.
+- `metric` returns one float or integer score for the batch. A custom metric can apply a different scoring rule.
 
 `predictions[i][j]` is the predicted probability of `query.options[j]` for document `i`, and `labels[i]` is that document's reference label. For instance, `predictions[0][1]` is the probability the model assigns to `Opposes` for the first document, and a value of `0` in `labels[0]` means the reference answer is `Supports`.
 

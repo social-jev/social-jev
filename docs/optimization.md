@@ -91,7 +91,7 @@ optimization = model.optimize(
 
 `query` supplies the initial wording and answer options. `trainset` and `valset` accept lists or GEPA data loaders. Each record contains `state` and `label`, with an optional `explanation`. When `valset` is omitted, GEPA uses the training set for validation.
 
-The custom metric receives [probability vectors and reference labels](evaluation.md#api-reference) one example at a time. It returns a one-element list of scores and optional feedback for reflection.
+The default metric gives each prediction a score of 1.0 if its top option matches the integer reference label and 0.0 otherwise. A custom metric receives [probability vectors and reference labels](evaluation.md#api-reference) one example at a time. It returns a one-element list of scores and optional feedback for reflection.
 
 ```python
 from social_jev.evaluation import Label
