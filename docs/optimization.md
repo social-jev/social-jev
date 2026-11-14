@@ -60,8 +60,7 @@ Here `model` is your configured SocialJev instance. Pass lists or GEPA
 `DataLoader` instances for `trainset` and `valset`. SocialJev forwards them
 directly to AsyncGEPA. Each record needs a `state` and `label`, with an optional
 `explanation` for reflection. Integer labels are zero-based option indices, so
-`1` means the second option. Distribution labels give the target probabilities
-in option order.
+`1` means the second option.
 
 ## Compare the result with your baseline
 
@@ -115,8 +114,8 @@ input order.
   minibatches use more evaluations and produce longer reflection prompts.
 
 - **Scoring.** The default metric uses the most probable option. It returns
-  1 for a correct hard label and 0 otherwise. For a distribution label, it
-  returns the target probability of the predicted option. A custom `metric`
+  1.0 if the prediction matches the integer reference label and 0.0 otherwise.
+  A custom `metric`
   receives a list containing one prediction vector and a list containing one
   label. It returns a one-element score list and optional feedback text.
 - **Reflection.** Pass `reflection_prompt_template=` to replace the template,

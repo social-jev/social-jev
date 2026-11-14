@@ -9,6 +9,7 @@ import pytest
 from social_jev import Query, Result, SocialJev
 from social_jev.metrics import f1
 
+
 class ParityModel(SocialJev):
     """Score the test query without loading a checkpoint."""
 
@@ -25,6 +26,18 @@ class ParityModel(SocialJev):
 
     async def aquery(self, requests):
         return self.query(requests)
+
+
+def test_evaluation_accuracy_requires_integer_labels():
+    """Score exact matches and reject partial-credit labels with the default metric."""
+    model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
+    query = Query(text="improved", options=["Even", "Odd"])
+    data = [{"state": "2", "label": 0}, {"state": "4", "label": 1}]
+
+    assert model.evaluate(query=query, data=data).score == 0.5
+
+    with pytest.raises(TypeError, match="Accuracy requires integer option indices"):
+        model.evaluate(query=query, data=[{"state": "2", "label": [0.75, 0.25]}])
 
 
 def test_evaluation_f1_uses_first_option():
@@ -51,7 +64,7 @@ def test_optimization_returns_the_winning_query_and_scores(monkeypatch, continuo
     original = Query(text="initial", options=["Even", "Odd"])
     improved = Query(text="improved", options=["Even", "Odd"])
     trainset = [{"state": "2", "label": 0}, {"state": "3", "label": 1}]
-    valset = [{"state": "4", "label": 0}, {"state": "5", "label": [0.0, 1.0]}]
+    valset = [{"state": "4", "label": 0}, {"state": "5", "label": 1}]
     option_counts = []
 
     def reflect(request):

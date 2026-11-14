@@ -85,12 +85,14 @@ class ReflectedQuery(Query):
 
 
 def accuracy(predictions, labels):
-    """Score the most probable option against a hard or distribution label."""
+    """Return 1.0 for each matching integer label and 0.0 otherwise."""
     scores = []
     for probabilities, label in zip(predictions, labels, strict=True):
         predicted = max(range(len(probabilities)), key=probabilities.__getitem__)
-        score = float(predicted == label) if isinstance(label, int) else float(label[predicted])
-        scores.append(score)
+        if not isinstance(label, int):
+            msg = "Accuracy requires integer option indices as labels."
+            raise TypeError(msg)
+        scores.append(float(predicted == label))
     return scores, None
 
 
