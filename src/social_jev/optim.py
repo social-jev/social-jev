@@ -89,9 +89,6 @@ def accuracy(predictions, labels):
     scores = []
     for probabilities, label in zip(predictions, labels, strict=True):
         predicted = max(range(len(probabilities)), key=probabilities.__getitem__)
-        if not isinstance(label, int):
-            msg = "Accuracy requires integer option indices as labels."
-            raise TypeError(msg)
         scores.append(float(predicted == label))
     return scores, None
 
