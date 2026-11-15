@@ -121,6 +121,10 @@ class SocialJev:
         """Submit requests synchronously; results are ordered by document, then query."""
         if self.remote is not None:
             return self.remote.submit(requests)
+        from .transformers import TransformersEngine  # noqa: PLC0415
+
+        if isinstance(self.engine, TransformersEngine):
+            return self.engine.query(requests)
         encoded = self.processor.encode(requests)
         scores = self.engine.process(encoded.inputs)
         return self.processor.decode(scores, encoded)
