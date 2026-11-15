@@ -1,7 +1,16 @@
 """Post-training settings for SocialJev checkpoints."""
 
+import os
+import socket
+import tempfile
 from dataclasses import dataclass
 from math import isfinite
+from pathlib import Path
+from unittest.mock import patch
+
+import torch
+import torch.distributed as dist
+from huggingface_hub import snapshot_download
 
 from .data import Sample
 
@@ -49,16 +58,6 @@ class TrainConfig:
 
 def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C901, PLR0913 -- own the training process and cleanup.
     """Load source weights and run TorchTitan on the available GPUs."""
-    import os  # noqa: PLC0415
-    import socket  # noqa: PLC0415
-    import tempfile  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
-    from unittest.mock import patch  # noqa: PLC0415
-
-    import torch  # noqa: PLC0415
-    import torch.distributed as dist  # noqa: PLC0415
-    from huggingface_hub import snapshot_download  # noqa: PLC0415
-
     if not torch.cuda.is_available():
         message = "TorchTitan training requires a CUDA device."
         raise RuntimeError(message)
