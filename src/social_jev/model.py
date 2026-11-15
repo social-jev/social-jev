@@ -113,7 +113,7 @@ class SocialJev:
         else:
             checkpoint_config = SocialJevConfig.from_pretrained(
                 repo,
-                revision=kwargs.get("revision"),
+                revision=kwargs.get("revision") or "main",
                 token=kwargs.get("hf_token") if backend == "vllm" else kwargs.get("token"),
                 local_files_only=kwargs.get("local_files_only", False),
             )
