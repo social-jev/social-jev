@@ -26,7 +26,6 @@ benchmark = [
 ]
 dev = [
     { include-group = "benchmark" },
-    "torchtitan==0.3.0; sys_platform == 'linux'",
     "actionlint-py>=1.7.12.24",
     "deptry>=0.25.1",
     "mutmut>=3.7.0",
