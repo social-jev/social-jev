@@ -12,6 +12,7 @@ dependencies = ["torch>=2.13", "transformers>=5.17,<6", "pydantic>=2"]
 compute = ["modal", "vastai", "httpx", "fastapi", "uvicorn", "huggingface-hub>=1.33"]
 vllm = ["vllm==0.31.0", "httpx"]
 optim = ["async-gepa", "instructor>=1.17"]
+train = ["huggingface-hub", "torchtitan==0.3.0; sys_platform == 'linux'"]
 
 [project.entry-points."vllm.general_plugins"]
 social_jev = "social_jev.vllm.plugin:register"
@@ -25,6 +26,7 @@ benchmark = [
 ]
 dev = [
     { include-group = "benchmark" },
+    "torchtitan==0.3.0; sys_platform == 'linux'",
     "actionlint-py>=1.7.12.24",
     "deptry>=0.25.1",
     "mutmut>=3.7.0",

@@ -7,6 +7,8 @@ import torch
 from transformers import AutoTokenizer
 
 from social_jev import Query, Request, SocialJev
+from social_jev.data import Sample
+from social_jev.packing import SampleStep, packed_batches
 
 
 def requests():
@@ -137,3 +139,44 @@ def test_transformers_loading_kwargs_reach_model(checkpoint, monkeypatch):
         assert len(model.query(requests())) == 2
     finally:
         model.stop()
+
+
+def test_packed_transformers_matches_independent_candidates(checkpoint):
+    model = SocialJev.from_pretrained(checkpoint)
+    items = requests()
+    encoded = model.processor.encode(items)
+    expected = model.processor.decode(model.engine.process(encoded.inputs), encoded)
+
+    for packed, split in zip(model.query(items), expected, strict=True):
+        for result, reference in zip(packed, split, strict=True):
+            assert result.probabilities == pytest.approx(reference.probabilities, abs=1e-6)
+    model.stop()
+
+
+def test_packed_training_targets_follow_queries(checkpoint):
+    model = SocialJev.from_pretrained(checkpoint)
+    first, second = requests()
+
+    def source():
+        yield Sample(Sample.from_request(first).messages, [0, [0.1, 0.2, 0.7]])
+        yield Sample(Sample.from_request(second).messages, [1])
+
+    batches = packed_batches(
+        SampleStep(source, 0, 1),
+        model.processor.tokenizer,
+        seq_len=128,
+        batch_size=2,
+        drop_last=False,
+    )
+    batch = batches.next()
+    assert batch is not None
+    assert batch.targets is not None
+    assert batch.targets.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
+    logits = model.engine.model.forward_packed(batch)
+    assert logits.shape == batch.targets.shape
+    assert torch.equal(logits.isneginf(), batch.option_indices < 0)
+    log_probs = logits.float().log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
+    loss = -(batch.targets * log_probs).sum() / len(batch.targets)
+    loss.backward()
+    assert model.engine.model.decision_head.network[-1].weight.grad.isfinite().all()
+    model.stop()
