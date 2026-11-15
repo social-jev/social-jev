@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
-from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
+from . import (
+    config as checkpoint_registration,  # noqa: F401 -- Register the checkpoint configuration before loading.
+)
 from .data import Processor
 from .integrations.context import active_provider
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from transformers import PreTrainedTokenizerBase
 
+    from .data import Sample
     from .integrations.context import RemoteClient
+    from .training import TrainConfig
     from .types import Request, Result
 
 
@@ -33,6 +40,9 @@ class SocialJev:
         'Transport'
         >>> model.stop()  # doctest: +SKIP
     """
+
+    repo: str
+    revision: str | None
 
     def __init__(
         self,
@@ -99,6 +109,19 @@ class SocialJev:
         if provider is not None:
             remote = provider.start(str(repo), backend=backend, serve=serve, **kwargs)
             return cls(None, None, serve=serve, remote=remote)
+        source = Path(repo)
+        if source.is_dir():
+            repo = str(source.resolve())
+        else:
+            checkpoint_config = AutoConfig.from_pretrained(
+                repo,
+                revision=kwargs.get("revision"),
+                token=kwargs.get("hf_token") if backend == "vllm" else kwargs.get("token"),
+                local_files_only=kwargs.get("local_files_only", False),
+            )
+            kwargs["revision"] = getattr(checkpoint_config, "_commit_hash", None) or kwargs.get(
+                "revision"
+            )
         if backend == "transformers":
             from .transformers import TransformersEngine  # noqa: PLC0415
 
@@ -115,7 +138,10 @@ class SocialJev:
 
                 engine = VllmEngine(repo, **kwargs)
         processor = Processor(cast("PreTrainedTokenizerBase", tokenizer))
-        return cls(processor, engine, serve=serve)
+        model = cls(processor, engine, serve=serve)
+        model.repo = str(repo)
+        model.revision = kwargs.get("revision")
+        return model
 
     def query(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests synchronously; results are ordered by document, then query."""
@@ -146,3 +172,33 @@ class SocialJev:
             self.remote.close()
         else:
             self.engine.stop()
+
+    def train(
+        self: SocialJev | None = None,
+        *,
+        repo: str | None = None,
+        revision: str | None = None,
+        trainset: Callable[[], Iterable[Sample]],
+        valset: Callable[[], Iterable[Sample]] | None = None,
+        config: TrainConfig,
+    ):
+        """Post-train a checkpoint directly or hand off this model's devices."""
+        from .training import run  # noqa: PLC0415 -- optional training dependencies.
+
+        if repo is None:
+            if self is None:
+                message = "SocialJev.train() requires repo=."
+                raise TypeError(message)
+            if revision is not None:
+                message = "Supply repo= when overriding revision=."
+                raise TypeError(message)
+            repo, revision = self.repo, self.revision
+
+        return run(
+            repo,
+            revision=revision,
+            trainset=trainset,
+            valset=valset,
+            config=config,
+            stop_inference=None if self is None else self.stop,
+        )
