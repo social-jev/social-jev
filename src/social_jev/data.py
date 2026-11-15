@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
+from math import isclose
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -17,12 +18,60 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 
+type Target = int | list[float]
+
+
 @dataclass
 class Sample:
     """A complete request represented as role-tagged messages."""
 
     messages: list[dict[str, str]]
     """Document, questions, and options in their original order."""
+
+    targets: list[Target] | None = None
+    """One reference target per query."""
+    metadata: dict[str, str] = field(default_factory=dict)
+    """Caller-supplied categories for reporting."""
+    query_ids: list[int] = field(default_factory=list)
+    """Positions of the queries in the original inference request batch."""
+
+    def __post_init__(self):  # noqa: C901 -- validate roles and their aligned targets.
+        roles = [message["role"] for message in self.messages]
+        groups: list[list[str]] = []
+        if not roles or roles[0] != "state":
+            message = "A sample must start with a state message."
+            raise ValueError(message)
+        for entry in self.messages[1:]:
+            role = entry["role"]
+            if role == "query":
+                groups.append([])
+            elif role == "option" and groups:
+                groups[-1].append(entry["content"])
+            elif role != "example" or not groups or groups[-1]:
+                message = "Expected a query, optional examples, and then its options."
+                raise ValueError(message)
+        if not groups or any(
+            not options or len(set(options)) != len(options) for options in groups
+        ):
+            message = "Each query requires distinct answer options."
+            raise ValueError(message)
+        if self.targets is None:
+            return
+        if len(self.targets) != len(groups):
+            message = "Supply one target per query."
+            raise ValueError(message)
+        for target, options in zip(self.targets, groups, strict=True):
+            if isinstance(target, int):
+                if not 0 <= target < len(options):
+                    message = "Target index is outside the query's options."
+                    raise ValueError(message)
+            elif (
+                len(target) != len(options)
+                or any(p < 0 for p in target)
+                or not isclose(sum(target), 1.0, abs_tol=1e-6)
+            ):
+                message = "Supply one nonnegative probability per option summing to one."
+                raise ValueError(message)
 
     @classmethod
     def from_request(cls, request: Request) -> Sample:
@@ -45,6 +94,13 @@ class TokenizedSample:
     roles: list[str]
     """Message roles aligned with their token boundaries."""
 
+    targets: list[Target] | None = None
+    """Targets aligned with the query messages."""
+    metadata: list[dict[str, str]] = field(default_factory=list)
+    """Reporting categories for each query."""
+    query_ids: list[int] = field(default_factory=list)
+    """Original inference positions for each query."""
+
     @classmethod
     def from_sample(cls, sample: Sample, tokenizer: PreTrainedTokenizerBase) -> TokenizedSample:
         """Apply the checkpoint template once to the complete message list."""
@@ -62,7 +118,14 @@ class TokenizedSample:
         if len(boundaries) != len(roles) or not boundaries or boundaries[-1] != len(ids) - 1:
             message = "Checkpoint template must terminate each message with <|im_end|>"
             raise ValueError(message)
-        return cls(ids, boundaries, roles)
+        return cls(
+            ids,
+            boundaries,
+            roles,
+            sample.targets,
+            [sample.metadata] * roles.count("query"),
+            sample.query_ids,
+        )
 
     def __len__(self) -> int:
         """Return the number of tokens."""
@@ -74,10 +137,14 @@ class TokenizedSample:
         stop = max(start, stop)
         offsets = [0, *(end + 1 for end in self.message_boundaries)]
         token_start, token_stop = offsets[start], offsets[stop]
+        queries = slice(self.roles[:start].count("query"), self.roles[:stop].count("query"))
         return TokenizedSample(
             ids=self.ids[token_start:token_stop],
             message_boundaries=[end - token_start for end in self.message_boundaries[start:stop]],
             roles=self.roles[start:stop],
+            targets=None if self.targets is None else self.targets[queries],
+            metadata=self.metadata[queries],
+            query_ids=self.query_ids[queries],
         )
 
     def __add__(self, other: TokenizedSample) -> TokenizedSample:
@@ -87,6 +154,13 @@ class TokenizedSample:
             message_boundaries=self.message_boundaries
             + [end + len(self) for end in other.message_boundaries],
             roles=self.roles + other.roles,
+            targets=(
+                None
+                if self.targets is None and other.targets is None
+                else (self.targets or []) + (other.targets or [])
+            ),
+            metadata=self.metadata + other.metadata,
+            query_ids=self.query_ids + other.query_ids,
         )
 
     def split(self) -> Iterator[TokenizedSample]:
@@ -99,6 +173,21 @@ class TokenizedSample:
             elif role == "option":
                 assert query is not None
                 yield state + query + self[index : index + 1]
+
+    def split_at_length(self, maximum: int) -> tuple[TokenizedSample, TokenizedSample | None]:
+        """Keep complete queries together and repeat the state when splitting."""
+        if len(self) <= maximum:
+            return self, None
+        state_end = self.roles.index("query")
+        ends = [
+            index for index, role in enumerate(self.roles) if role == "query" and index > state_end
+        ]
+        fitting = [end for end in ends if self.message_boundaries[end - 1] < maximum]
+        if not fitting:
+            message = "Query and its options exceed model context capacity."
+            raise ValueError(message)
+        end = fitting[-1]
+        return self[:end], self[:state_end] + self[end:]
 
 
 @dataclass
@@ -186,11 +275,17 @@ class FormatStep(Step[Sample]):
     def __init__(self, requests: list[Request]):
         """Initialize this call's request cursor."""
         self.requests = iter(requests)
+        self.query_id = 0
 
     def next(self) -> Sample | None:
         """Format the next complete request."""
         request = next(self.requests, None)
-        return None if request is None else Sample.from_request(request)
+        if request is None:
+            return None
+        sample = Sample.from_request(request)
+        sample.query_ids = list(range(self.query_id, self.query_id + len(request.queries)))
+        self.query_id += len(request.queries)
+        return sample
 
 
 class TokenizeStep(Step[TokenizedSample]):
