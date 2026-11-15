@@ -6,11 +6,9 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 
-from . import (
-    config as checkpoint_registration,  # noqa: F401 -- Register the checkpoint configuration before loading.
-)
+from .config import SocialJevConfig
 from .data import Processor
 from .integrations.context import active_provider
 
@@ -113,7 +111,7 @@ class SocialJev:
         if source.is_dir():
             repo = str(source.resolve())
         else:
-            checkpoint_config = AutoConfig.from_pretrained(
+            checkpoint_config = SocialJevConfig.from_pretrained(
                 repo,
                 revision=kwargs.get("revision"),
                 token=kwargs.get("hf_token") if backend == "vllm" else kwargs.get("token"),
