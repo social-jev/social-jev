@@ -33,7 +33,6 @@ class VastAI:
         gpu: Vast.ai GPU name, such as "H100_SXM".
         num_gpus: Number of GPUs on one instance.
         max_hourly_price: Maximum advertised instance rate in USD per hour, if supplied.
-        startup_timeout: Seconds allowed for the instance and model to start.
         **kwargs: Vast instance options such as image and disk. Disk defaults
             to 10 GB and is also used to price offers.
 
@@ -43,13 +42,8 @@ class VastAI:
         ...     results = model.query(requests)
     """
 
-    def __init__(
-        self,
-        *,
-        max_hourly_price: float | None = None,
-        startup_timeout: float = 600,
-        **kwargs: Any,
-    ):
+    def __init__(self, **kwargs: Any):
+        max_hourly_price = kwargs.pop("max_hourly_price", None)
         if max_hourly_price is not None and (
             not math.isfinite(max_hourly_price) or max_hourly_price <= 0
         ):
@@ -66,7 +60,6 @@ class VastAI:
             "cancel_unavail": True,
         } | kwargs
         self.max_hourly_price = max_hourly_price
-        self.startup_timeout = startup_timeout
         self.context_token: Token[Provider | None] | None = None
         self.session: ExitStack | None = None
 
@@ -111,7 +104,7 @@ class VastAI:
         )
         vast = VastSDK()
         offer = self.select_offer(vast)
-        deadline = monotonic() + self.startup_timeout
+        deadline = monotonic() + 600
         with ExitStack() as startup:
             rental = vast.create_instance(
                 id=offer["id"],
