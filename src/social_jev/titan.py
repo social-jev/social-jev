@@ -93,6 +93,7 @@ class TitanLoader(BaseDataLoader):
             seq_len=self.seq_len,
             batch_size=self.batch_size,
             drop_last=True,
+            fixed_length=True,
         )
         for _ in range(self.consumed):
             batches.next()
@@ -388,6 +389,7 @@ class Validation(Validator):
             seq_len=self.config.seq_len,
             batch_size=self.config.batch_size,
             drop_last=False,
+            fixed_length=True,
         )
         total = torch.zeros((), device=model.device)
         queries = 0
