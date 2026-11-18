@@ -29,8 +29,7 @@ class TrainConfig:
     data_parallel_shard_degree: int = -1
     head_lr: float = 1e-3
     backbone_lr: float | None = None
-    eval_steps: int | None = None
-    val_fraction: float | None = None
+    val_steps: int | None = None
 
     def __post_init__(self):  # noqa: C901 -- check independent public settings together.
         """Validate settings that do not depend on the available devices."""
@@ -48,11 +47,8 @@ class TrainConfig:
             if value is not None and (not isfinite(value) or value <= 0):
                 message = f"{name} must be finite and positive."
                 raise ValueError(message)
-        if self.eval_steps is not None and self.eval_steps < 1:
-            message = "eval_steps must be positive."
-            raise ValueError(message)
-        if self.val_fraction is not None and not 0 < self.val_fraction < 1:
-            message = "val_fraction must be between zero and one."
+        if self.val_steps is not None and self.val_steps < 1:
+            message = "val_steps must be positive."
             raise ValueError(message)
 
 
@@ -63,19 +59,6 @@ def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C
         raise RuntimeError(message)
 
     from .titan import TrainedModel, Trainer  # noqa: PLC0415 -- optional training dependencies.
-
-    if config.val_fraction is not None:
-        if valset is not None:
-            message = "Choose valset or val_fraction."
-            raise ValueError(message)
-        dataset = trainset()
-        boundary = int(len(dataset) * (1 - config.val_fraction))
-
-        def trainset():
-            return (dataset[index] for index in range(boundary))
-
-        def valset():
-            return (dataset[index] for index in range(boundary, len(dataset)))
 
     checkpoint = (
         Path(repo).resolve()
@@ -107,7 +90,7 @@ def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C
         try:
             trainer = Trainer.from_checkpoint(checkpoint, config, trainset, valset, run_dir)
             trainer.train()
-            if valset is not None and config.eval_steps is None and trainer.step < config.steps:
+            if valset is not None and config.val_steps is None and trainer.step < config.steps:
                 trainer.validator.validate(trainer.model_parts, trainer.step)
             model = trainer.model_parts[0].eval()
             model.source_checkpoint = checkpoint

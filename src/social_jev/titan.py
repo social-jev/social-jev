@@ -334,7 +334,7 @@ class Trainer(TorchTitanTrainer):
             validator=Validation.Config(
                 enable=valset is not None,
                 source=valset,
-                interval=config.eval_steps,
+                interval=config.val_steps,
                 seq_len=config.seq_len,
                 batch_size=config.local_batch_size,
                 steps=config.steps,
