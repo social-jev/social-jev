@@ -167,9 +167,13 @@ def test_packed_training_targets_follow_queries(checkpoint):
         seq_len=128,
         batch_size=2,
         drop_last=False,
+        fixed_length=True,
     )
     batch = batches.next()
     assert batch is not None
+    assert batch.input_ids.shape[1] == 128
+    for row, boundaries in zip(batch.input_ids, batch.message_boundaries, strict=True):
+        assert (row[boundaries[-1] + 1 :] == model.processor.tokenizer.pad_token_id).all()
     assert batch.targets is not None
     assert batch.targets.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
     logits = model.engine.model.forward_packed(batch)

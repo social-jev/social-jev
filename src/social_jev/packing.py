@@ -34,9 +34,12 @@ class PackedBatch:
     targets: torch.Tensor | None
 
     @classmethod
-    def from_samples(cls, samples: list[TokenizedSample], pad_id: int) -> PackedBatch:  # noqa: C901 -- collate tokens and query targets in the same order.
+    def from_samples(cls, samples: list[TokenizedSample], pad_id: int | None) -> PackedBatch:  # noqa: C901 -- collate tokens and query targets in the same order.
         """Collate token sequences and align target rows with query and option order."""
-        length = max(map(len, samples))
+        rows = [sample.ids for sample in samples]
+        if pad_id is not None:
+            length = max(map(len, rows))
+            rows = [row + [pad_id] * (length - len(row)) for row in rows]
         groups: list[list[int]] = []
         positions: list[tuple[int, int]] = []
         for row, sample in enumerate(samples):
@@ -57,7 +60,7 @@ class PackedBatch:
                 else:
                     targets[row, : len(group)] = torch.tensor(label)
         return cls(
-            input_ids=torch.tensor([s.ids + [pad_id] * (length - len(s)) for s in samples]),
+            input_ids=torch.tensor(rows),
             message_boundaries=[s.message_boundaries for s in samples],
             roles=[s.roles for s in samples],
             query_ids=[query for s in samples for query in s.query_ids],
@@ -109,13 +112,14 @@ class SplitByLengthStep(Step["TokenizedSample"]):
 class PackAndPadStep(Step["TokenizedSample"]):
     """Pack samples with mert's longest-fitting lookahead."""
 
-    def __init__(self, parent: Step[TokenizedSample], seq_len: int):
+    def __init__(self, parent: Step[TokenizedSample], seq_len: int, pad_id: int | None):
         self.parent = parent
         self.seq_len = seq_len
+        self.pad_id = pad_id
         self.buffer: list[TokenizedSample] = []
 
     def next(self) -> TokenizedSample | None:
-        """Fill the available space and let collation pad to the longest row."""
+        """Pack to the sequence limit and right-pad fixed-length rows."""
         while len(self.buffer) < PACKING_LOOKAHEAD:
             sample = self.parent.next()
             if sample is None:
@@ -131,6 +135,8 @@ class PackAndPadStep(Step["TokenizedSample"]):
         ]:
             index = max(fitting, key=lambda index: len(self.buffer[index]))
             packed = packed + self.buffer.pop(index)
+        if self.pad_id is not None:
+            packed = replace(packed, ids=packed.ids + [self.pad_id] * (self.seq_len - len(packed)))
         return packed
 
 
@@ -138,7 +144,7 @@ class CollateStep(Step[PackedBatch]):
     """Gather packed sequences into one CPU batch."""
 
     def __init__(
-        self, parent: Step[TokenizedSample], batch_size: int, pad_id: int, *, drop_last: bool
+        self, parent: Step[TokenizedSample], batch_size: int, pad_id: int | None, *, drop_last: bool
     ):
         self.parent = parent
         self.batch_size = batch_size
@@ -158,16 +164,18 @@ class CollateStep(Step[PackedBatch]):
         return PackedBatch.from_samples(samples, self.pad_id)
 
 
-def packed_batches(
+def packed_batches(  # noqa: PLR0913 -- configure packing and collation.
     parent: Step[Sample],
     tokenizer: PreTrainedTokenizerBase,
     *,
     seq_len: int,
     batch_size: int,
     drop_last: bool,
+    fixed_length: bool = False,
 ) -> CollateStep:
     """Use the same tokenization and packing for inference and training."""
     tokens = TokenizeStep(parent, tokenizer)
     splits = SplitByLengthStep(tokens, seq_len)
-    packed = PackAndPadStep(splits, seq_len)
-    return CollateStep(packed, batch_size, tokenizer.pad_token_id, drop_last=drop_last)
+    pad_id = tokenizer.pad_token_id
+    packed = PackAndPadStep(splits, seq_len, pad_id if fixed_length else None)
+    return CollateStep(packed, batch_size, None if fixed_length else pad_id, drop_last=drop_last)

@@ -22,7 +22,7 @@ class TrainConfig:
     """Configure supervised post-training."""
 
     steps: int
-    seq_len: int = 2048
+    seq_len: int = 4096
     local_batch_size: int = 1
     global_batch_size: int = -1
     data_parallel_replicate_degree: int = 1
