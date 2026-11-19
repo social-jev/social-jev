@@ -1,5 +1,6 @@
 """Typed document coding requests and results."""
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -68,3 +69,16 @@ class Result(BaseModel):
     """Candidate answer with the highest probability."""
     probabilities: dict[str, float]
     """Probabilities normalized over the supplied candidate answers."""
+
+
+type OptionLogits = torch.Tensor
+"""Model scores before softmax, shaped [queries, options]."""
+
+type OptionLabels = torch.Tensor
+"""Reference probabilities in option order, shaped [queries, options]."""
+
+type OptionMask = torch.Tensor
+"""Boolean mask marking supplied options rather than padded columns."""
+
+type QueryLosses = torch.Tensor
+"""One differentiable loss per query, shaped [queries]."""

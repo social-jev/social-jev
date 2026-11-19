@@ -181,7 +181,7 @@ class SocialJev:
         config: TrainConfig,
     ):
         """Post-train a checkpoint directly or hand off this model's devices."""
-        from .training import run  # noqa: PLC0415 -- optional training dependencies.
+        from .training.trainer import run  # noqa: PLC0415 -- optional training dependencies.
 
         if repo is None:
             if self is None:

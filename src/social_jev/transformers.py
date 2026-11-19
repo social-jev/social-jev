@@ -8,14 +8,13 @@ from transformers import AutoTokenizer, PreTrainedModel, Qwen3Model
 
 from .attention import AttentionMask, Positions
 from .config import SocialJevConfig
-from .data import Batch, Encoded, FormatStep
+from .data import Batch, Encoded, FormatStep, packed_batches
 from .head import DecisionHeadConfig, ScalarHead
-from .packing import packed_batches
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-    from .packing import PackedBatch
+    from .data import PackedBatch
     from .types import Request, Result
 
 
@@ -119,7 +118,7 @@ class TransformersEngine:
         items = requests if isinstance(requests, list) else [requests]
         maximum = self.model.config.backbone_config.max_position_embeddings
         batches = packed_batches(
-            FormatStep(items), self.tokenizer, seq_len=maximum, batch_size=1, drop_last=False
+            FormatStep(items), self.tokenizer, seq_len=maximum, batch_size=1, pad=False
         )
         scores = {}
         while (batch := batches.next()) is not None:

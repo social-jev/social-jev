@@ -7,8 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from social_jev import Query, Request, SocialJev
-from social_jev.data import Sample
-from social_jev.packing import SampleStep, packed_batches
+from social_jev.data import Sample, SampleStep, packed_batches
 
 
 def requests():
@@ -162,12 +161,10 @@ def test_packed_training_targets_follow_queries(checkpoint):
         yield Sample(Sample.from_request(second).messages, [1])
 
     batches = packed_batches(
-        SampleStep(source, 0, 1),
+        SampleStep(source, 0, 1, infinite=False, shuffle_buffer_size=1),
         model.processor.tokenizer,
         seq_len=128,
         batch_size=2,
-        drop_last=False,
-        fixed_length=True,
     )
     batch = batches.next()
     assert batch is not None
