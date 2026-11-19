@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TypedDict
 
+
+import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -107,3 +109,15 @@ class EvaluationResult:
     predictions: list[Result]
     labels: list[Label]
     calibration: CalibrationMetrics
+
+type OptionLogits = torch.Tensor
+"""Model scores before softmax, shaped [queries, options]."""
+
+type OptionLabels = torch.Tensor
+"""Reference probabilities in option order, shaped [queries, options]."""
+
+type OptionMask = torch.Tensor
+"""Boolean mask marking supplied options rather than padded columns."""
+
+type QueryLosses = torch.Tensor
+"""One differentiable loss per query, shaped [queries]."""

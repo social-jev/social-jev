@@ -7,7 +7,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
 if TYPE_CHECKING:
-    from .packing import PackedBatch as Batch
+    from .data import PackedBatch as Batch
 
 
 ROLES = ("state", "query", "example", "option", "answer")

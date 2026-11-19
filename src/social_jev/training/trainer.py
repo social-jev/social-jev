@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -9,10 +11,11 @@ from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, snapshot_download
 from torch.distributed import checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -20,7 +23,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
 )
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
-from torchtitan.components.dataloader import BaseDataLoader, DataloaderExhaustedError
+from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
 from torchtitan.components.optimizer import OptimizersContainer
 from torchtitan.components.optimizer.optimizer import ParamGroupConfig
@@ -34,17 +37,18 @@ from torchtitan.protocols.model_spec import ModelSpec
 from torchtitan.trainer import Trainer as TorchTitanTrainer
 from transformers import AutoTokenizer
 
-from .config import SocialJevConfig
-from .packing import SampleStep, packed_batches
-from .transformers import SocialJevModel
+from ..config import SocialJevConfig
+from ..data import SampleStep, packed_batches
+from ..transformers import SocialJevModel
+from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from transformers import PreTrainedTokenizerBase
 
-    from .data import Sample
-    from .training import TrainConfig
+    from ..data import Sample
+    from .config import TrainConfig
 
 
 class TitanTokenizer(Configurable):
@@ -65,6 +69,7 @@ class TitanLoader(BaseDataLoader):
     @dataclass(kw_only=True, slots=True)
     class Config(BaseDataLoader.Config):
         source: Callable[[], Iterable[Sample]]
+        shuffle_buffer_size: int = 256
 
     def __init__(  # noqa: PLR0913 -- torch titan loader interface.
         self,
@@ -80,7 +85,7 @@ class TitanLoader(BaseDataLoader):
         del snapshot_every_n_steps
         self.config = config
         self.rank = dp_rank
-        self.ranks = dp_world_size
+        self.world_size = dp_world_size
         self.tokenizer = tokenizer.tokenizer
         self.seq_len = seq_len
         self.batch_size = local_batch_size
@@ -88,12 +93,15 @@ class TitanLoader(BaseDataLoader):
 
     def __iter__(self):
         batches = packed_batches(
-            SampleStep(self.config.source, self.rank, self.ranks),
+            SampleStep(
+                self.config.source,
+                self.rank,
+                self.world_size,
+                shuffle_buffer_size=self.config.shuffle_buffer_size,
+            ),
             self.tokenizer,
             seq_len=self.seq_len,
             batch_size=self.batch_size,
-            drop_last=True,
-            fixed_length=True,
         )
         for _ in range(self.consumed):
             batches.next()
@@ -219,7 +227,9 @@ class Trainer(TorchTitanTrainer):
 
     @dataclass(kw_only=True, slots=True)
     class Config(TorchTitanTrainer.Config):
-        pass
+        loss_fn: Loss
+
+    config: Config
 
     def __init__(self, config):
         super().__init__(config)
@@ -228,8 +238,8 @@ class Trainer(TorchTitanTrainer):
         dcp.load(weights, storage_reader=dcp.HuggingFaceStorageReader(config.hf_assets_path))
         set_model_state_dict(model, weights)
 
-    def train_step(self, data_iterator):  # noqa: C901 -- coordinate each update across ranks.
-        """Accumulate loss over queries, with all ranks stopping together."""
+    def train_step(self, data_iterator):
+        """Accumulate per-query losses normalized across the complete distributed update."""
         should_log = self.metrics_processor.should_log(self.step)
         observations = []
         group = (
@@ -237,34 +247,20 @@ class Trainer(TorchTitanTrainer):
             if self.parallel_dims.dp_enabled
             else None
         )
-        window = []
-        for _ in range(self.gradient_accumulation_steps):
-            try:
-                inputs, targets = next(data_iterator)
-                window.append((inputs, targets))
-            except DataloaderExhaustedError:
-                break
-        complete = torch.tensor(
-            int(len(window) == self.gradient_accumulation_steps), device=self.device
-        )
-        if group is not None:
-            dist.all_reduce(complete, op=dist.ReduceOp.MIN, group=group)
-        if not complete.item():
-            self.step -= 1
-            raise DataloaderExhaustedError
+        batches = [next(data_iterator) for _ in range(self.gradient_accumulation_steps)]
 
-        count = torch.tensor(sum(len(targets) for _, targets in window), device=self.device)
+        count = torch.tensor(sum(len(targets) for _, targets in batches), device=self.device)
         if group is not None:
             dist.all_reduce(count, group=group)
         self.optimizers.zero_grad(set_to_none=True)
         model = self.model_parts[0]
         total = torch.zeros((), device=self.device)
-        for inputs, targets in window:
+        for inputs, _targets in batches:
             batch = inputs["batch"].to(self.device)
             with self.train_context():
                 logits = model(batch).float()
-                log_probs = logits.log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
-                losses = -(targets.to(self.device) * log_probs).sum(dim=-1)
+                assert batch.targets is not None
+                losses = self.config.loss_fn(logits, batch.targets, batch.option_indices >= 0)
                 loss = losses.sum() / count
                 loss.backward()
             if should_log:
@@ -278,7 +274,7 @@ class Trainer(TorchTitanTrainer):
         if should_log:
             mesh = self.parallel_dims.get_optional_mesh("loss")
             mean = dist_utils.dist_sum(total, mesh)
-            maximum = dist_utils.dist_max(total * count / sum(len(y) for _, y in window), mesh)
+            maximum = dist_utils.dist_max(total * count / sum(len(y) for _, y in batches), mesh)
             extras = {"train/loss": mean, **self.lr_schedulers.get_metrics()}
             extras.update(metadata_metrics(observations, "train", group))
             self.metrics_processor.log(self.step, mean, maximum, float(norm.item()), extras)
@@ -302,6 +298,7 @@ class Trainer(TorchTitanTrainer):
                 ),
             )
         return cls.Config(
+            loss_fn=config.loss_fn,
             model_spec=ModelSpec(
                 name="social_jev",
                 flavor="post-training",
@@ -317,7 +314,9 @@ class Trainer(TorchTitanTrainer):
             hf_assets_path=str(checkpoint),
             dump_folder=run_dir,
             tokenizer=TitanTokenizer.Config(),
-            dataloader=TitanLoader.Config(source=trainset),
+            dataloader=TitanLoader.Config(
+                source=trainset, shuffle_buffer_size=config.shuffle_buffer_size
+            ),
             training=TrainingConfig(
                 steps=config.steps,
                 seq_len=config.seq_len,
@@ -335,6 +334,7 @@ class Trainer(TorchTitanTrainer):
             validator=Validation.Config(
                 enable=valset is not None,
                 source=valset,
+                loss_fn=config.loss_fn,
                 interval=config.val_steps,
                 seq_len=config.seq_len,
                 batch_size=config.local_batch_size,
@@ -349,6 +349,7 @@ class Validation(Validator):
     @dataclass(kw_only=True, slots=True)
     class Config(Validator.Config):
         source: Callable[[], Iterable[Sample]] | None
+        loss_fn: Loss
         interval: int | None
         seq_len: int
         batch_size: int
@@ -367,14 +368,15 @@ class Validation(Validator):
     ):
         del kwargs
         self.config: Validation.Config = config
+        self.last_step: int | None = None
         del dp_rank, dp_world_size, parallel_dims
         self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
         self.metrics_processor = metrics_processor
 
     def should_validate(self, step):
-        """Use the requested interval, or the final step when omitted."""
-        return (
-            step % self.config.interval == 0 if self.config.interval else step == self.config.steps
+        """Validate at step zero, the requested intervals, and the final update."""
+        return step in (0, self.config.steps) or (
+            self.config.interval is not None and step % self.config.interval == 0
         )
 
     @torch.no_grad()
@@ -384,12 +386,10 @@ class Validation(Validator):
         source = self.config.source
         assert source is not None
         batches = packed_batches(
-            SampleStep(source, 0, 1),
+            SampleStep(source, 0, 1, infinite=False),
             self.tokenizer,
             seq_len=self.config.seq_len,
             batch_size=self.config.batch_size,
-            drop_last=False,
-            fixed_length=True,
         )
         total = torch.zeros((), device=model.device)
         queries = 0
@@ -398,10 +398,9 @@ class Validation(Validator):
             while (batch := batches.next()) is not None:
                 batch = batch.to(model.device)
                 logits = model(batch).float()
-                log_probs = logits.log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
                 targets = batch.targets
                 assert targets is not None
-                losses = -(targets * log_probs).sum(dim=-1)
+                losses = self.config.loss_fn(logits, targets, batch.option_indices >= 0)
                 total += losses.sum()
                 queries += len(targets)
                 observations.append((losses.to("cpu"), batch.metadata))
@@ -409,6 +408,7 @@ class Validation(Validator):
                 mean = float(total.item()) / queries
                 extras = {"eval/loss": mean, **metadata_metrics(observations, "eval", None)}
                 self.metrics_processor.log_validation(mean, step, extras)
+            self.last_step = step
         finally:
             model.train()
 
@@ -432,3 +432,57 @@ def metadata_metrics(observations, prefix, group):
         for (name, value), count in counts.items()
         for metric, result in (("loss", sums[name, value] / count), ("queries", count))
     }
+
+
+def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C901, PLR0913 -- own the training process and cleanup.
+    """Load source weights and run TorchTitan on the available GPUs."""
+    if not torch.cuda.is_available():
+        message = "TorchTitan training requires a CUDA device."
+        raise RuntimeError(message)
+
+    checkpoint = (
+        Path(repo).resolve()
+        if Path(repo).is_dir()
+        else Path(snapshot_download(repo, revision=revision))
+    )
+    environment = {}
+    if "LOCAL_RANK" not in os.environ:
+        # give a direct single-device call the same process settings as torchrun
+        with socket.socket() as server:
+            server.bind(("127.0.0.1", 0))
+            port = str(server.getsockname()[1])
+        environment = {
+            "LOCAL_RANK": "0",
+            "RANK": "0",
+            "WORLD_SIZE": "1",
+            "MASTER_ADDR": "127.0.0.1",
+            "MASTER_PORT": port,
+        }
+
+    if stop_inference is not None:
+        stop_inference()
+        torch.cuda.empty_cache()
+
+    with patch.dict(os.environ, environment), TemporaryDirectory() as run_dir:
+        owns_process_group = not dist.is_initialized()
+        trainer = None
+        keep_process_group = False
+        try:
+            trainer = Trainer.from_checkpoint(checkpoint, config, trainset, valset, run_dir)
+            if valset is not None:
+                trainer.validator.validate(trainer.model_parts, trainer.step)
+            trainer.train()
+            if valset is not None and trainer.validator.last_step != trainer.step:
+                trainer.validator.validate(trainer.model_parts, trainer.step)
+            model = trainer.model_parts[0].eval()
+            model.source_checkpoint = checkpoint
+            model.tokenizer = trainer.tokenizer.tokenizer
+            if dist.get_world_size() > 1:
+                keep_process_group = True
+                return TrainedModel(model, owns_process_group)
+            return model
+        finally:
+            if trainer is not None:
+                trainer.close()
+            if owns_process_group and dist.is_initialized() and not keep_process_group:
+                dist.destroy_process_group()
