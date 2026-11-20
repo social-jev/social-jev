@@ -124,3 +124,35 @@ def test_optimization_returns_the_winning_query_and_scores(monkeypatch, continuo
     assert optimization.result.val_aggregate_scores == [0.0, 1.0]
     assert optimization.result.total_metric_calls == 8
     assert option_counts == ([1, 2] if continuous else [])
+
+
+@pytest.mark.skipif(
+    find_spec("async_gepa") is None,
+    reason="Install the optim extra to exercise AsyncGEPA",
+)
+@pytest.mark.parametrize("capture_traces", [True, False])
+def test_async_adapter_awaits_inference_and_preserves_batch(capture_traces):
+    """The native async adapter must not enter SocialJev's synchronous query path."""
+    import asyncio  # noqa: PLC0415
+
+    from social_jev.optim import AsyncGEPAAdapter, accuracy  # noqa: PLC0415
+
+    query = Query(text="improved", options=["Even", "Odd"])
+    data = [{"state": "2", "label": 0}, {"state": "3", "label": 1}]
+
+    class AsyncModel:
+        async def aquery(self, requests):
+            assert [request.state for request in requests] == ["2", "3"]
+            return [
+                [Result(choice="Even", probabilities={"Even": 0.9, "Odd": 0.1})],
+                [Result(choice="Odd", probabilities={"Even": 0.2, "Odd": 0.8})],
+            ]
+
+    adapter = AsyncGEPAAdapter(AsyncModel(), query, accuracy)
+    result = asyncio.run(adapter.evaluate(data, {"query": query.model_dump_json()}, capture_traces))
+    assert result.outputs == [[0.9, 0.1], [0.2, 0.8]]
+    assert result.scores == [1.0, 1.0]
+    if capture_traces:
+        assert [trace["Feedback"]["label"] for trace in result.trajectories] == [0, 1]
+    else:
+        assert result.trajectories is None

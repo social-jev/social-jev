@@ -140,6 +140,7 @@ class SocialJev:
         from async_gepa import optimize  # noqa: PLC0415  # ty: ignore[unresolved-import]
 
         from social_jev.optim import (  # noqa: PLC0415
+            AsyncGEPAAdapter,
             GEPAAdapter,
             OptimizationResult,
             accuracy,
@@ -147,8 +148,11 @@ class SocialJev:
             get_scheduler_kwargs,
         )
 
-        adapter = GEPAAdapter(self, query, accuracy if metric is None else metric)
         scheduler_kwargs = get_scheduler_kwargs(kwargs)
+        adapter_type = (
+            AsyncGEPAAdapter if scheduler_kwargs["scheduler"] is not None else GEPAAdapter
+        )
+        adapter = adapter_type(self, query, accuracy if metric is None else metric)
         proposer_kwargs = get_proposer_kwargs(kwargs)
         result = optimize(
             seed_candidate={"query": query.model_dump_json()},
