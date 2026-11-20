@@ -105,7 +105,13 @@ class Modal:
         options = self.options.copy()
         gpu = options["gpu"]
         max_inputs = options.pop("max_inputs")
-        if backend == "transformers" and int(gpu.partition(":")[2] or "1") > 1:
+        if (
+            backend == "transformers"
+            and int(
+                gpu.partition(":")[2] or "1"  # ty: ignore[unresolved-attribute] -- gpu is a string in the mixed options dictionary.
+            )
+            > 1
+        ):
             message = (
                 "Transformers on Modal uses one GPU. Request one GPU or choose "
                 'backend="vllm" and configure parallelism for your workload.'
@@ -134,7 +140,12 @@ class Modal:
             session = startup.pop_all()
 
         self.session = session
-        return ModalClient(worker, session, backend=backend, max_inputs=max_inputs)
+        return ModalClient(
+            worker,
+            session,
+            backend=backend,
+            max_inputs=max_inputs,  # ty: ignore[invalid-argument-type] -- max_inputs is int or None in the mixed options dictionary.
+        )
 
 
 def make_worker(modal: Any, repo: str, backend: str, serve: bool, settings: dict):  # noqa: C901 -- Register both handler variants.
