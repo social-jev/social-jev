@@ -294,8 +294,8 @@ wheels = [
 
 [[package]]
 name = "async-gepa"
-version = "0.1.0"
-source = { git = "https://github.com/DGoettlich/async-gepa.git?branch=continuous-rollouts#cd360daec30c8ddef22a89d9c2efc405f5268db4" }
+version = "0.1.4"
+source = { git = "https://github.com/DGoettlich/async-gepa.git?branch=rework%2F09-benchmark-integration#0c3edd12ac9d50bdd873637d40d3fa8f55ac7c51" }
 
 [[package]]
 name = "attrs"
@@ -5491,7 +5491,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "async-gepa", marker = "extra == 'optim'", git = "https://github.com/DGoettlich/async-gepa.git?branch=continuous-rollouts" },
+    { name = "async-gepa", marker = "extra == 'optim'", git = "https://github.com/DGoettlich/async-gepa.git?branch=rework%2F09-benchmark-integration" },
     { name = "httpx", marker = "extra == 'vllm'" },
     { name = "instructor", marker = "extra == 'optim'", specifier = ">=1.17" },
     { name = "litellm", marker = "extra == 'optim'", specifier = ">=1.83,<1.92" },

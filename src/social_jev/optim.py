@@ -7,11 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from async_gepa import (  # ty: ignore[unresolved-import]
-    ContinuousRollouts,
-    EvaluationBatch,
-    RolloutResult,
-)
+from async_gepa import EvaluationBatch  # ty: ignore[unresolved-import]
+from async_gepa.strategies.scheduling import ContinuousRollouts  # ty: ignore[unresolved-import]
 from pydantic import ValidationInfo, field_validator
 
 from .types import Query, Request
@@ -159,6 +156,8 @@ def make_default_proposer(template, model_kwargs):
         )
         return {"query": query.model_dump_json()}
 
+    # functions carry the same concurrency flag as reflector instances.
+    propose.independent = True  # ty: ignore[unresolved-attribute]
     return propose
 
 
@@ -205,7 +204,7 @@ class GEPAAdapter:
                     "metric_feedback": feedback,
                 },
             }
-        return RolloutResult(output=probabilities, score=score, trace=trace)
+        return probabilities, score, trace
 
     def evaluate(self, batch, candidate, capture_traces=False):
         """Evaluate a batch for GEPA's standard loop."""
@@ -217,18 +216,29 @@ class GEPAAdapter:
             for example, (prediction,) in zip(batch, rows, strict=True)
         ]
         return EvaluationBatch(
-            outputs=[rollout.output for rollout in rollouts],
-            scores=[rollout.score for rollout in rollouts],
-            trajectories=[rollout.trace for rollout in rollouts] if capture_traces else None,
+            outputs=[rollout[0] for rollout in rollouts],
+            scores=[rollout[1] for rollout in rollouts],
+            trajectories=[rollout[2] for rollout in rollouts] if capture_traces else None,
         )
-
-    async def evaluate_one(self, candidate, example, *, capture_traces):
-        """Evaluate one example for continuous rollouts."""
-        query = self.candidate_query(candidate)
-        request = Request(state=example["state"], queries=[query])
-        ((prediction,),) = await self.model.aquery(request)
-        return self.score(query, example, prediction, capture_traces=capture_traces)
 
     def make_reflective_dataset(self, candidate, eval_batch, components_to_update):  # noqa: ARG002
         """Make training traces available to GEPA's proposer."""
         return {component: eval_batch.trajectories or [] for component in components_to_update}
+
+
+class AsyncGEPAAdapter(GEPAAdapter):
+    """Evaluate batches through SocialJev's asynchronous inference path."""
+
+    async def evaluate(self, batch, candidate, capture_traces=False):
+        query = self.candidate_query(candidate)
+        requests = [Request(state=example["state"], queries=[query]) for example in batch]
+        rows = await self.model.aquery(requests)
+        rollouts = [
+            self.score(query, example, prediction, capture_traces=capture_traces)
+            for example, (prediction,) in zip(batch, rows, strict=True)
+        ]
+        return EvaluationBatch(
+            outputs=[rollout[0] for rollout in rollouts],
+            scores=[rollout[1] for rollout in rollouts],
+            trajectories=[rollout[2] for rollout in rollouts] if capture_traces else None,
+        )

@@ -131,8 +131,10 @@ social_jev = ["py.typed", "templates/*.jinja"]
 known_first_party = ["social_jev", "fineweb"]
 
 [tool.deptry.per_rule_ignores]
+# GEPA loads LiteLLM dynamically when reflection_lm is a provider/model string.
+DEP002 = ["litellm"]
 # Dataset loading belongs to the benchmark dependency group, not package runtime.
 DEP004 = ["datasets", "prometheus_client"]
 
 [tool.uv.sources]
-async-gepa = { git = "https://github.com/DGoettlich/async-gepa.git", branch = "continuous-rollouts" }
+async-gepa = { git = "https://github.com/DGoettlich/async-gepa.git", branch = "rework/09-benchmark-integration" }

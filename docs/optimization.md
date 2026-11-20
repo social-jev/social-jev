@@ -150,3 +150,11 @@ full list of shared parameters and the [AsyncGEPA package] and its
 [GEPA optimize reference]: https://gepa-ai.github.io/gepa/api/core/optimize/
 [AsyncGEPA package]: https://github.com/DGoettlich/async-gepa/tree/continuous-rollouts
 [continuous rollout settings]: https://github.com/DGoettlich/async-gepa/blob/continuous-rollouts/src/async_gepa/core/continuous_rollouts.py
+
+### Adapter execution
+
+Continuous rollouts use `AsyncGEPAAdapter.evaluate`, which awaits `model.aquery`.
+Setting `scheduler=None` selects `GEPAAdapter.evaluate` and `model.query` instead.
+Both return the same GEPA `EvaluationBatch` with scores and reflection feedback.
+The default Instructor proposer declares concurrent reflection support; custom
+proposers without that declaration are called sequentially while inference continues.
