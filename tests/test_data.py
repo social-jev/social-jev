@@ -1,0 +1,175 @@
+from collections import Counter
+from itertools import islice
+
+import pytest
+import torch
+
+from social_jev.attention import Positions
+from social_jev.data import (
+    CollateStep,
+    PackAndPadStep,
+    Sample,
+    SampleStep,
+    SplitStep,
+    Step,
+    TokenizedSample,
+)
+
+
+class Source(Step):
+    def __init__(self, samples):
+        self.samples = iter(samples)
+        self.reads = 0
+
+    def next(self):
+        sample = next(self.samples, None)
+        if sample is not None:
+            self.reads += 1
+        return sample
+
+
+def sample(index):
+    return Sample(
+        [
+            {"role": "state", "content": str(index)},
+            {"role": "query", "content": "Q"},
+            {"role": "option", "content": "A"},
+            {"role": "option", "content": "B"},
+        ],
+        targets=[index % 2],
+    )
+
+
+def tokenized(lengths, roles, targets=None):
+    boundaries = []
+    for length in lengths:
+        boundaries.append((boundaries[-1] + 1 if boundaries else 0) + length - 1)
+    count = roles.count("query")
+    return TokenizedSample(
+        ids=list(range(sum(lengths))),
+        message_boundaries=boundaries,
+        roles=roles,
+        targets=targets,
+        metadata=[{"task": str(index)} for index in range(count)],
+        query_ids=list(range(count)),
+    )
+
+
+def test_shuffle_is_lazy_disjoint_and_restarts():
+    reads = []
+
+    def source():
+        for index in range(20):
+            reads.append(index)
+            yield sample(index)
+
+    first = SampleStep(source, 0, 1, shuffle_buffer_size=4)
+    assert reads == [0, 1, 2, 3]
+    first.next()
+    assert len(reads) == 5
+
+    common = SampleStep(source, 0, 1, shuffle_buffer_size=4)
+    ordered = [item.messages[0]["content"] for item in islice(iter(common.next, None), 40)]
+    ranks = [SampleStep(source, rank, 2, shuffle_buffer_size=4) for rank in range(2)]
+    for rank, step in enumerate(ranks):
+        selected = [item.messages[0]["content"] for item in islice(iter(step.next, None), 20)]
+        assert selected == ordered[rank::2]
+    assert Counter(ordered[:20]) == Counter(map(str, range(20)))
+    assert Counter(ordered[20:]) == Counter(ordered[:20])
+    assert ordered[:20] != ordered[20:]
+
+
+def test_finite_source_yields_each_sample_once():
+    step = SampleStep(lambda: (sample(i) for i in range(7)), 0, 1, infinite=False)
+    output = list(iter(step.next, None))
+    assert Counter(item.messages[0]["content"] for item in output) == Counter(map(str, range(7)))
+    assert step.next() is None
+
+
+def test_query_split_preserves_tokens_labels_and_metadata():
+    original = tokenized(
+        [2, 1, 1, 1, 1, 1, 1],
+        ["state", "query", "option", "option", "query", "option", "option"],
+        [0, [0.25, 0.75]],
+    )
+    intact, remainder = original.split(on="query", maximum=8)
+    assert intact is original
+    assert remainder is None
+    split = SplitStep(Source([original]), split_on="query", seq_len=5)
+    rows = list(iter(split.next, None))
+    assert [row.ids for row in rows] == [[0, 1, 2, 3, 4], [0, 1, 5, 6, 7]]
+    assert [row.targets for row in rows] == [[0], [[0.25, 0.75]]]
+    assert [row.query_ids for row in rows] == [[0], [1]]
+    assert [row.metadata for row in rows] == [[{"task": "0"}], [{"task": "1"}]]
+    assert all(row.message_boundaries == [1, 2, 3, 4] for row in rows)
+
+
+def test_option_split_keeps_query_and_option_order():
+    original = tokenized(
+        [2, 1, 1, 1, 1, 1],
+        ["state", "query", "option", "option", "query", "option"],
+    )
+    split = SplitStep(Source([original]))
+    rows = list(iter(split.next, None))
+    assert [row.ids for row in rows] == [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 5, 6]]
+    assert [row.query_ids for row in rows] == [[0], [0], [1]]
+    assert all(row.roles == ["state", "query", "option"] for row in rows)
+
+
+def test_overlength_queries_warn_once_and_preserve_following_queries():
+    original = tokenized(
+        [2, 4, 1, 4, 1, 1, 1],
+        ["state", "query", "option", "query", "option", "query", "option"],
+        [0, 0, 0],
+    )
+    split = SplitStep(Source([original]), split_on="query", seq_len=4)
+    with pytest.warns(UserWarning, match="Increase seq_len") as warnings:
+        output = list(iter(split.next, None))
+    assert len(warnings) == 1
+    assert len(output) == 1
+    assert output[0].query_ids == [2]
+    assert output[0].ids == [0, 1, 12, 13]
+
+
+def test_bucket_packing_is_first_fit_and_pads_only_when_requested():
+    samples = [tokenized([length], ["state"]) for length in (6, 3, 4, 7)]
+    padded = list(iter(PackAndPadStep(Source(samples), 10, 99).next, None))
+    unpadded = list(iter(PackAndPadStep(Source(samples), 10, 99, pad=False).next, None))
+    assert [len(row) for row in unpadded] == [9, 7, 4]
+    assert [len(row) for row in padded] == [10, 10, 10]
+    assert unpadded[0].message_boundaries == [5, 8]
+    for row, reference in zip(padded, unpadded, strict=True):
+        assert row.ids == reference.ids + [99] * (10 - len(reference))
+        assert row.message_boundaries == reference.message_boundaries
+    assert sorted(value for row in unpadded for value in row.ids) == sorted(
+        value for row in samples for value in row.ids
+    )
+
+
+def test_bucket_limit_emits_before_source_exhaustion():
+    source = Source(tokenized([6], ["state"]) for _ in range(40))
+    packed = PackAndPadStep(source, 10, 99)
+    first = packed.next()
+    assert first is not None
+    assert len(first) == 10
+    assert source.reads == 33
+    assert len(list(iter(packed.next, None))) == 39
+
+
+def test_collation_aligns_labels_and_positions_including_partial_batch():
+    samples = [
+        tokenized([2, 1, 1, 1], ["state", "query", "option", "option"], [1]),
+        tokenized(
+            [2, 1, 1, 1, 1], ["state", "query", "option", "option", "option"], [[0.2, 0.3, 0.5]]
+        ),
+    ]
+    packed = PackAndPadStep(Source(samples), 6, 99)
+    batches = CollateStep(packed, 3)
+    batch = batches.next()
+    assert batch is not None
+    assert batch.input_ids.shape == (2, 6)
+    torch.testing.assert_close(batch.targets, torch.tensor([[0.2, 0.3, 0.5], [0, 1, 0]]))
+    assert batch.option_indices.tolist() == [[0, 1, 2], [3, 4, -1]]
+    assert Positions(batch).value.tolist() == [[0, 1, 2, 3, 3, 3], [0, 1, 2, 3, 3, 0]]
+    assert torch.equal(batch.input_ids[1, -1], torch.tensor(99))
+    assert batches.next() is None

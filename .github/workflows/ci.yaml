@@ -53,6 +53,8 @@ jobs:
           python-version: '3.12'
           enable-cache: true
       - run: uv sync --locked --group dev
+      - if: matrix.hooks == 'ty'
+        run: uv sync --locked --group dev --extra train
       - run: uv run --frozen prek run ${{ matrix.hooks }} --all-files
 
   test_quality:

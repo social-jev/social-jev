@@ -3,14 +3,19 @@
 from typing import TYPE_CHECKING, cast
 
 import torch
+from torch.nn.attention.flex_attention import create_mask
 from transformers import AutoTokenizer, PreTrainedModel, Qwen3Model
 
+from .attention import AttentionMask, Positions
 from .config import SocialJevConfig
-from .data import Batch
+from .data import Batch, Encoded, FormatStep, packed_batches
 from .head import DecisionHeadConfig, ScalarHead
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
+
+    from .data import PackedBatch
+    from .types import Request, Result
 
 
 class SocialJevModel(PreTrainedModel):
@@ -46,6 +51,27 @@ class SocialJevModel(PreTrainedModel):
         rows = torch.arange(input_ids.shape[0], device=input_ids.device)
         positions = attention_mask.sum(-1) - 1
         return self.decision_head(hidden[rows, positions])
+
+    def forward_packed(self, batch: "PackedBatch"):
+        """Read one scalar for each option using the checkpoint attention rules."""
+        block_mask = AttentionMask(batch, config=getattr(self.config, "attention", None)).value
+        mask = block_mask
+        if self.backbone.config._attn_implementation != "flex_attention":
+            size, length = batch.input_ids.shape
+            mask = create_mask(
+                block_mask.mask_mod, size, 1, length, length, device=str(batch.input_ids.device)
+            )
+        hidden = self.backbone(
+            input_ids=batch.input_ids,
+            position_ids=Positions(batch).value,
+            attention_mask={"full_attention": mask},
+            use_cache=False,
+        ).last_hidden_state
+        rows, positions = batch.option_positions.unbind(dim=-1)
+        scores = self.decision_head(hidden[rows, positions])
+        return scores[batch.option_indices.clamp(min=0)].masked_fill(
+            batch.option_indices < 0, -torch.inf
+        )
 
 
 class TransformersEngine:
@@ -83,6 +109,25 @@ class TransformersEngine:
             self.model(input_ids=batch.input_ids, attention_mask=batch.attention_mask)
             .float()
             .tolist()
+        )
+
+    @torch.inference_mode()
+    def query(self, requests: "Request | list[Request]") -> "list[list[Result]]":
+        """Score packed requests and restore the original query order."""
+        assert self.model is not None
+        items = requests if isinstance(requests, list) else [requests]
+        maximum = self.model.config.backbone_config.max_position_embeddings
+        batches = packed_batches(
+            FormatStep(items), self.tokenizer, seq_len=maximum, batch_size=1, pad=False
+        )
+        scores = {}
+        while (batch := batches.next()) is not None:
+            logits = self.model.forward_packed(batch.to(self.model.device)).float().tolist()
+            counts = (batch.option_indices >= 0).sum(dim=-1).tolist()
+            for index, row, count in zip(batch.query_ids, logits, counts, strict=True):
+                scores[index] = row[:count]
+        return Encoded([], items).results(
+            [score for index in range(len(scores)) for score in scores[index]]
         )
 
     def stop(self):
