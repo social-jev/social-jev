@@ -69,7 +69,11 @@ addopts = [
     "--cov-fail-under=80",
 ]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # PyTorch's own MKLDNN module still uses its deprecated TorchScript API.
+    "ignore:.*torch.jit.*is deprecated:DeprecationWarning:torch.utils.mkldnn",
+]
 
 
 [tool.ruff]
