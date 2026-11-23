@@ -7,6 +7,7 @@ import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
@@ -22,7 +23,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import DataParallelMeshDims, MixedPrecisionPolicy, fully_shard
 from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
 from torchtitan.components.optimizer import OptimizersContainer
@@ -207,17 +208,26 @@ class TrainedModel:
             dist.destroy_process_group()
 
 
-def parallelize(model, *, parallel_dims, **kwargs):
-    """Apply the requested data-parallel mesh to the Transformers layers."""
+def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
+    """Apply replication or sharding to the Transformers layers."""
     del kwargs
     if not parallel_dims.dp_enabled:
         return model
-    dims = ["dp_replicate", "fsdp"] if parallel_dims.dp_replicate_enabled else ["fsdp"]
-    mesh = parallel_dims.get_mesh(dims)
-    policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
-    for layer in model.backbone.layers:
-        fully_shard(layer, mesh=mesh, mp_policy=policy)
-    fully_shard(model, mesh=mesh, mp_policy=policy)
+    policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=reduce_dtype)
+    if parallel_dims.dp_shard == 1:
+        # replication only: every rank retains the complete model
+        fully_shard(
+            model,
+            mesh=parallel_dims.get_mesh("dp_replicate"),
+            dp_mesh_dims=DataParallelMeshDims(replicate="dp_replicate"),
+            mp_policy=policy,
+        )
+    else:
+        dims = ["dp_replicate", "fsdp"] if parallel_dims.dp_replicate_enabled else ["fsdp"]
+        mesh = parallel_dims.get_mesh(dims)
+        for layer in model.backbone.layers:
+            fully_shard(layer, mesh=mesh, mp_policy=policy)
+        fully_shard(model, mesh=mesh, mp_policy=policy)
     disable_fsdp_gradient_division(model)
     return model
 
@@ -282,6 +292,14 @@ class Trainer(TorchTitanTrainer):
     @classmethod
     def from_checkpoint(cls, checkpoint, config: TrainConfig, trainset, valset, run_dir):
         """Build TorchTitan with the source checkpoint and two learning rates."""
+        world_size = (
+            dist.get_world_size()
+            if dist.is_initialized()
+            else int(os.environ.get("WORLD_SIZE", "1"))
+        )
+        replicate_degree = config.data_parallel_replicate_degree
+        if replicate_degree is None:
+            replicate_degree = world_size // config.data_parallel_shard_degree
         groups = [
             ParamGroupConfig(
                 pattern=r"^decision_head\.",
@@ -306,7 +324,7 @@ class Trainer(TorchTitanTrainer):
                     checkpoint=str(checkpoint),
                     train_backbone=config.backbone_lr is not None,
                 ),
-                parallelize_fn=parallelize,
+                parallelize_fn=partial(parallelize, reduce_dtype=config.reduce_dtype),
                 pipelining_fn=None,
                 post_optimizer_build_fn=None,
                 state_dict_adapter=None,
@@ -325,7 +343,7 @@ class Trainer(TorchTitanTrainer):
                 disable_cuda_graphs=True,
             ),
             parallelism=ParallelismConfig(
-                data_parallel_replicate_degree=config.data_parallel_replicate_degree,
+                data_parallel_replicate_degree=replicate_degree,
                 data_parallel_shard_degree=config.data_parallel_shard_degree,
                 spmd_backend="partial_dtensor",
             ),
