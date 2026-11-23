@@ -6,18 +6,17 @@ import os
 import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from shutil import copy2
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import snapshot_download
 from torch.distributed import checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -160,54 +159,23 @@ class TitanModel(SocialJevModel, Configurable):
             return self.forward_packed(input_ids)
         return super().forward(input_ids, attention_mask)
 
-    def save_pretrained(self, save_directory, **kwargs):
-        """Save updated weights with the tokenizer and the source checkpoint code."""
-        super().save_pretrained(save_directory, **kwargs)
-        self.tokenizer.save_pretrained(save_directory)
-        for source in self.source_checkpoint.rglob("*.py"):
-            target = Path(save_directory) / source.relative_to(self.source_checkpoint)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            copy2(source, target)
-        copy2(self.source_checkpoint / "config.json", Path(save_directory) / "config.json")
-
-
-class TrainedModel:
-    """Hold the distributed model until caller publication or cleanup."""
-
-    def __init__(self, model, owns_process_group):
-        self.model: TitanModel | None = model
-        self.owns_process_group = owns_process_group
-
-    def push_to_hub(self, repo_id, *, private=None, revision=None):
-        """Collect the weights on rank zero and publish the complete checkpoint."""
-        model = self.model
-        assert model is not None
+    def to_hf(self, tokenizer) -> SocialJevModel | None:
+        """Collect an ordinary Transformers model on rank zero."""
         weights = get_model_state_dict(
-            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+            self, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
         )
-        status = [None, None]
-        if dist.get_rank() == 0:
-            try:
-                with TemporaryDirectory() as directory:
-                    model.save_pretrained(directory, state_dict=weights)
-                    api = HfApi()
-                    api.create_repo(repo_id, private=private, exist_ok=True)
-                    status[0] = api.upload_folder(
-                        repo_id=repo_id, folder_path=directory, revision=revision
-                    ).commit_url
-            except Exception as error:  # noqa: BLE001 -- return publication errors to every rank.
-                status[1] = str(error)
-        dist.broadcast_object_list(status, src=0)
-        if status[1] is not None:
-            message = f"Checkpoint publication failed: {status[1]}"
-            raise RuntimeError(message)
-        return status[0]
-
-    def stop(self):
-        """Release the local weight shard and its process group."""
-        self.model = None
-        if self.owns_process_group:
-            dist.destroy_process_group()
+        if dist.get_rank() != 0:
+            return None
+        # attach collected tensors without allocating another set of weights
+        with torch.device("meta"):
+            model = SocialJevModel(deepcopy(self.config))
+        model.load_state_dict(weights, assign=True)
+        # checkpoints omit these nonpersistent rotary buffers
+        rotary = model.backbone.rotary_emb
+        with torch.device("cpu"):
+            model.backbone.rotary_emb = type(rotary)(model.backbone.config)
+        model.tokenizer = tokenizer
+        return model.eval()
 
 
 def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
@@ -256,9 +224,12 @@ class Trainer(TorchTitanTrainer):
         parallel_dims = super().init_distributed()
         if self.config.run_dir is not None:
             directory = [
-                datetime.now().astimezone().strftime(self.config.run_dir) if dist.get_rank() == 0 else None
+                datetime.now().astimezone().strftime(self.config.run_dir)
+                if dist.get_rank() == 0
+                else None
             ]
             dist.broadcast_object_list(directory, src=0)
+            assert directory[0] is not None
             self.config.dump_folder = directory[0]
         return parallel_dims
 
@@ -475,7 +446,7 @@ def metadata_metrics(observations, prefix, group):
     }
 
 
-def run(repo, *, revision, trainset, valset, config, run_dir, stop_inference):  # noqa: C901, PLR0913 -- own the training process and cleanup.
+def run(repo, *, revision, trainset, valset, config, run_dir, save, stop_inference):  # noqa: C901, PLR0912, PLR0913 -- own the training process and cleanup.
     """Load source weights and run TorchTitan on the available GPUs."""
     if run_dir is None and config.checkpoint_steps is not None:
         message = "checkpoint_steps requires run_dir."
@@ -510,7 +481,7 @@ def run(repo, *, revision, trainset, valset, config, run_dir, stop_inference):  
     with patch.dict(os.environ, environment):
         owns_process_group = not dist.is_initialized()
         trainer = None
-        keep_process_group = False
+        trained = None
         try:
             trainer = Trainer.from_checkpoint(checkpoint, config, trainset, valset, run_dir)
             if valset is not None:
@@ -518,15 +489,18 @@ def run(repo, *, revision, trainset, valset, config, run_dir, stop_inference):  
             trainer.train()
             if valset is not None and trainer.validator.last_step != trainer.step:
                 trainer.validator.validate(trainer.model_parts, trainer.step)
-            model = trainer.model_parts[0].eval()
-            model.source_checkpoint = checkpoint
-            model.tokenizer = trainer.tokenizer.tokenizer
-            if dist.get_world_size() > 1:
-                keep_process_group = True
-                return TrainedModel(model, owns_process_group)
-            return model
+            if save is not None:
+                trained = trainer.model_parts[0].to_hf(trainer.tokenizer.tokenizer)
+                if trained is not None:
+                    if isinstance(save, Path):
+                        trained.save_pretrained(save.expanduser(), max_shard_size="5GB")
+                    else:
+                        trained.push_to_hub(save, max_shard_size="5GB")
         finally:
             if trainer is not None:
                 trainer.close()
-            if owns_process_group and dist.is_initialized() and not keep_process_group:
+            del trained
+            del trainer
+            if owns_process_group and dist.is_initialized():
                 dist.destroy_process_group()
+            torch.cuda.empty_cache()

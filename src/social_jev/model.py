@@ -263,7 +263,8 @@ class SocialJev:
         valset: Callable[[], Iterable[Sample]] | None = None,
         config: TrainConfig,
         run_dir: str | Path | None = "artifacts/train-%Y-%m-%d--%H-%M",
-    ):
+        save: str | Path | None = None,
+    ) -> None:
         """Post-train a checkpoint directly or hand off this model's devices."""
         from .training.trainer import run  # noqa: PLC0415 -- optional training dependencies.
 
@@ -276,12 +277,13 @@ class SocialJev:
                 raise TypeError(message)
             repo, revision = self.repo, self.revision
 
-        return run(
+        run(
             repo,
             revision=revision,
             trainset=trainset,
             valset=valset,
             config=config,
             run_dir=run_dir,
+            save=save,
             stop_inference=None if self is None else self.stop,
         )

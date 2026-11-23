@@ -37,11 +37,18 @@ class SocialJevModel(PreTrainedModel):
 
     def __init__(self, config: SocialJevConfig):
         super().__init__(config)
+        self.tokenizer: PreTrainedTokenizerBase | None = None
         self.backbone = Qwen3Model(config.backbone_config)
         self.decision_head = ScalarHead(
             DecisionHeadConfig(**config.decision_head), config.backbone_config.hidden_size
         )
         self.post_init()
+
+    def save_pretrained(self, save_directory, **kwargs):
+        """Save weights and configuration with the attached tokenizer and template."""
+        super().save_pretrained(save_directory, **kwargs)
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(save_directory)
 
     def forward(self, input_ids, attention_mask):
         """Return raw logits from each candidate's last nonpadding token."""
@@ -92,6 +99,7 @@ class TransformersEngine:
             "PreTrainedTokenizerBase",
             AutoTokenizer.from_pretrained(repo, revision=kwargs.get("revision")),
         )
+        self.model.tokenizer = self.tokenizer
         self.pad_id = self.tokenizer.pad_token_id
 
     @torch.inference_mode()
