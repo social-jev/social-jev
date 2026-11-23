@@ -9,17 +9,16 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
-from .evaluation import EvaluationResult
+from .evaluation import EvaluationResult, Metrics, create_eval_requests, get_named_metrics
 from .integrations.context import active_provider
 from .metrics import accuracy
-from .types import Request
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
     from .integrations.context import RemoteClient
     from .optim import OptimizationResult
-    from .types import Query, Result
+    from .types import Query, Request, Result
 
 
 class SocialJev:
@@ -140,21 +139,28 @@ class SocialJev:
         scores = await self.engine.aprocess(encoded.inputs)
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
 
-    def evaluate(self, *, query: Query, data, metric=accuracy) -> EvaluationResult:
-        """Score a batch of labeled examples with probability vectors in option order."""
-        examples = list(data)
-        if not examples:
-            msg = "Evaluation requires at least one labeled example."
-            raise ValueError(msg)
-
-        requests = [Request(state=example["state"], queries=[query]) for example in examples]
-        predictions = [prediction for (prediction,) in self.query(requests)]
-        labels = [example["label"] for example in examples]
+    def evaluate(
+        self, *, data, query: Query | list[Query] | None = None, metrics: Metrics = accuracy
+    ) -> EvaluationResult:
+        """Score shared or per-row queries with named metrics on selected decisions."""
+        named_metrics = get_named_metrics(metrics)
+        requests, labels, selected_metrics = create_eval_requests(
+            data, query=query, metric_names=named_metrics
+        )
+        predictions = [prediction for results in self.query(requests) for prediction in results]
+        queries = [item_query for request in requests for item_query in request.queries]
         probabilities = [
-            [prediction.probabilities[option] for option in query.options]
-            for prediction in predictions
+            [prediction.probabilities[option] for option in item_query.options]
+            for prediction, item_query in zip(predictions, queries, strict=True)
         ]
-        return EvaluationResult(metric(probabilities, labels), predictions, labels)
+        scores = {}
+        for name, metric in named_metrics.items():
+            indices = [i for i, names in enumerate(selected_metrics) if name in names]
+            if indices:
+                scores[name] = metric(
+                    [probabilities[i] for i in indices], [labels[i] for i in indices]
+                )
+        return EvaluationResult(scores=scores, predictions=predictions, labels=labels)
 
     def optimize(
         self, *, query: Query, trainset, valset=None, metric=None, **kwargs
