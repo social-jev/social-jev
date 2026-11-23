@@ -319,11 +319,15 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
             ],
             implementation="for-loop",
         ).build(model_parts=[model])
-        schedulers = LRSchedulersContainer(optimizers, lambda _step: 1.0)
+        schedulers = LRSchedulersContainer(optimizers, lambda step: 1 - step / 4)
         model(torch.ones(1, 2)).sum().backward()
         optimizers.step()
         schedulers.step()
         expected = model.weight.detach().clone()
+        optimizer = optimizers.optimizers[0]
+        expected_state = deepcopy(optimizer.state[model.weight])
+        expected_lr = optimizer.param_groups[0]["lr"]
+        expected_scheduler = schedulers.state_dict()
         manager = config.checkpoint.build(
             dataloader=None,
             model_parts=[model],
@@ -343,12 +347,20 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
         assert any("exp_avg" in key for key in metadata.state_dict_metadata)
         assert any("lr_scheduler" in key for key in metadata.state_dict_metadata)
         assert "train_state.step" in metadata.state_dict_metadata
+        schedulers.step()
+        optimizer.param_groups[0]["lr"] = 0.123
+        for value in optimizer.state[model.weight].values():
+            value.zero_()
         with torch.no_grad():
             model.weight.zero_()
         # torch titan recomputes the learning rate through get_lr() on restore
         with pytest.warns(UserWarning, match="To get the last learning rate"):
             assert manager.load(step=2)
         torch.testing.assert_close(model.weight, expected)
+        torch.testing.assert_close(optimizer.state[model.weight], expected_state)
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)
+        assert schedulers.state_dict() == expected_scheduler
+        assert schedulers.schedulers[0].get_last_lr() == pytest.approx([expected_lr])
         manager.close()
         assert (saved / ".metadata").is_file()
     finally:
