@@ -3,8 +3,9 @@ from itertools import islice
 
 import pytest
 import torch
+from torch.nn.attention.flex_attention import create_mask
 
-from social_jev.attention import Positions
+from social_jev.attention import AttentionMask, Positions
 from social_jev.data import (
     CollateStep,
     PackAndPadStep,
@@ -173,3 +174,28 @@ def test_collation_aligns_labels_and_positions_including_partial_batch():
     assert Positions(batch).value.tolist() == [[0, 1, 2, 3, 3, 3], [0, 1, 2, 3, 3, 0]]
     assert torch.equal(batch.input_ids[1, -1], torch.tensor(99))
     assert batches.next() is None
+
+
+def test_packed_attention_preserves_examples_and_isolates_options_and_samples():
+    roles = ["state", "query", "example", "example", "option", "option", "state", "query", "option"]
+    source = Source([tokenized([1] * len(roles), roles)])
+    batch = CollateStep(PackAndPadStep(source, 10, 99), 1).next()
+    assert batch is not None
+    mask = create_mask(AttentionMask(batch).value.mask_mod, 1, 1, 10, 10, device="cpu")
+    visible = [
+        [0],
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 3],
+        [0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 5],
+        [6],
+        [6, 7],
+        [6, 7, 8],
+        [9],
+    ]
+    expected = torch.zeros((10, 10), dtype=torch.bool)
+    for row, columns in enumerate(visible):
+        expected[row, columns] = True
+    torch.testing.assert_close(mask[0, 0], expected)
+    assert Positions(batch).value.tolist() == [[0, 1, 2, 2, 3, 3, 0, 1, 2, 0]]

@@ -61,7 +61,7 @@ class SocialJevModel(PreTrainedModel):
 
     def forward_packed(self, batch: "PackedBatch"):
         """Read one scalar for each option using the checkpoint attention rules."""
-        block_mask = AttentionMask(batch, config=getattr(self.config, "attention", None)).value
+        block_mask = AttentionMask(batch).value
         mask = block_mask
         if self.backbone.config._attn_implementation != "flex_attention":
             size, length = batch.input_ids.shape
