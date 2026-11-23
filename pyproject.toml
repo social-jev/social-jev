@@ -72,7 +72,7 @@ xfail_strict = true
 filterwarnings = [
     "error",
     # PyTorch's own MKLDNN module still uses its deprecated TorchScript API.
-    "ignore:.*torch.jit.*is deprecated:DeprecationWarning:torch.utils.mkldnn",
+    "ignore:.*torch.jit.*is deprecated:DeprecationWarning:torch.jit._script",
 ]
 
 
