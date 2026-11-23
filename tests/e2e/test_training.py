@@ -345,7 +345,9 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
         assert "train_state.step" in metadata.state_dict_metadata
         with torch.no_grad():
             model.weight.zero_()
-        assert manager.load(step=2)
+        # torch titan recomputes the learning rate through get_lr() on restore
+        with pytest.warns(UserWarning, match="To get the last learning rate"):
+            assert manager.load(step=2)
         torch.testing.assert_close(model.weight, expected)
         manager.close()
         assert (saved / ".metadata").is_file()
