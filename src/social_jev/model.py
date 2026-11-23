@@ -254,7 +254,7 @@ class SocialJev:
         else:
             self.engine.stop()
 
-    def train(
+    def train(  # noqa: PLR0913 -- public training inputs and output destinations.
         self: SocialJev | None = None,
         *,
         repo: str | None = None,
@@ -262,6 +262,7 @@ class SocialJev:
         trainset: Callable[[], Iterable[Sample]],
         valset: Callable[[], Iterable[Sample]] | None = None,
         config: TrainConfig,
+        run_dir: str | Path | None = "artifacts/train-%Y-%m-%d--%H-%M",
     ):
         """Post-train a checkpoint directly or hand off this model's devices."""
         from .training.trainer import run  # noqa: PLC0415 -- optional training dependencies.
@@ -281,5 +282,6 @@ class SocialJev:
             trainset=trainset,
             valset=valset,
             config=config,
+            run_dir=run_dir,
             stop_inference=None if self is None else self.stop,
         )

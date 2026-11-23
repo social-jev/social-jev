@@ -22,6 +22,7 @@ class TrainConfig:
     head_lr: float = 1e-3
     backbone_lr: float | None = None
     val_steps: int | None = None
+    checkpoint_steps: int | None = None
     shuffle_buffer_size: int = 256
     loss_fn: Loss = field(default_factory=FocalLoss)
 
@@ -53,6 +54,8 @@ class TrainConfig:
             if value is not None and (not isfinite(value) or value <= 0):
                 message = f"{name} must be finite and positive."
                 raise ValueError(message)
-        if self.val_steps is not None and self.val_steps < 1:
-            message = "val_steps must be positive."
-            raise ValueError(message)
+        for name in ("val_steps", "checkpoint_steps"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                message = f"{name} must be positive."
+                raise ValueError(message)

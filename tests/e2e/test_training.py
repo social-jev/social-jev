@@ -164,6 +164,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
         trainset=source,
         valset=source,
         config=TrainConfig(steps=3),
+        run_dir=None,
         stop_inference=None,
     )
     assert events == [("validate", 0), ("train", 0), ("validate", 3), ("close", 3)]

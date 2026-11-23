@@ -7,6 +7,7 @@ import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from shutil import copy2
@@ -24,6 +25,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
 )
 from torch.distributed.fsdp import DataParallelMeshDims, MixedPrecisionPolicy, fully_shard
+from torchtitan.components.checkpoint import CheckpointManager
 from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
 from torchtitan.components.optimizer import OptimizersContainer
@@ -238,6 +240,7 @@ class Trainer(TorchTitanTrainer):
     @dataclass(kw_only=True, slots=True)
     class Config(TorchTitanTrainer.Config):
         loss_fn: Loss
+        run_dir: str | None
 
     config: Config
 
@@ -247,6 +250,17 @@ class Trainer(TorchTitanTrainer):
         weights = get_model_state_dict(model)
         dcp.load(weights, storage_reader=dcp.HuggingFaceStorageReader(config.hf_assets_path))
         set_model_state_dict(model, weights)
+
+    def init_distributed(self):
+        """Initialize ranks and resolve their shared output directory."""
+        parallel_dims = super().init_distributed()
+        if self.config.run_dir is not None:
+            directory = [
+                datetime.now().astimezone().strftime(self.config.run_dir) if dist.get_rank() == 0 else None
+            ]
+            dist.broadcast_object_list(directory, src=0)
+            self.config.dump_folder = directory[0]
+        return parallel_dims
 
     def train_step(self, data_iterator):
         """Accumulate per-query losses normalized across the complete distributed update."""
@@ -330,7 +344,16 @@ class Trainer(TorchTitanTrainer):
                 state_dict_adapter=None,
             ),
             hf_assets_path=str(checkpoint),
-            dump_folder=run_dir,
+            run_dir=None if run_dir is None else str(run_dir),
+            dump_folder="." if run_dir is None else str(run_dir),
+            checkpoint=CheckpointManager.Config(
+                enable=run_dir is not None,
+                folder=".",
+                interval=config.checkpoint_steps or config.steps,
+                last_save_model_only=False,
+                last_save_in_hf=False,
+                keep_latest_k=0,
+            ),
             tokenizer=TitanTokenizer.Config(),
             dataloader=TitanLoader.Config(
                 source=trainset, shuffle_buffer_size=config.shuffle_buffer_size
@@ -452,8 +475,11 @@ def metadata_metrics(observations, prefix, group):
     }
 
 
-def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C901, PLR0913 -- own the training process and cleanup.
+def run(repo, *, revision, trainset, valset, config, run_dir, stop_inference):  # noqa: C901, PLR0913 -- own the training process and cleanup.
     """Load source weights and run TorchTitan on the available GPUs."""
+    if run_dir is None and config.checkpoint_steps is not None:
+        message = "checkpoint_steps requires run_dir."
+        raise ValueError(message)
     if not torch.cuda.is_available():
         message = "TorchTitan training requires a CUDA device."
         raise RuntimeError(message)
@@ -481,7 +507,7 @@ def run(repo, *, revision, trainset, valset, config, stop_inference):  # noqa: C
         stop_inference()
         torch.cuda.empty_cache()
 
-    with patch.dict(os.environ, environment), TemporaryDirectory() as run_dir:
+    with patch.dict(os.environ, environment):
         owns_process_group = not dist.is_initialized()
         trainer = None
         keep_process_group = False
