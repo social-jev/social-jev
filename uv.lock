@@ -32,6 +32,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[options.exclude-newer-package]
+async-gepa = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
+
 [[package]]
 name = "actionlint-py"
 version = "1.7.12.24"
@@ -294,8 +297,12 @@ wheels = [
 
 [[package]]
 name = "async-gepa"
-version = "0.1.4"
-source = { git = "https://github.com/DGoettlich/async-gepa.git?branch=rework%2F09-benchmark-integration#0c3edd12ac9d50bdd873637d40d3fa8f55ac7c51" }
+version = "0.1.0a1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/c0/d5d1dd2bdf67ad31e1553b9b5c112fc0a80d6ade8822502f7493bbce32fb/async_gepa-0.1.0a1.tar.gz", hash = "sha256:258b937e2d205e8c6bb96461ca7ecee166846f9ff8ed73dbde2604645a0ae2e4", size = 490238, upload-time = "2026-11-24T01:42:19.132Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/b7/132a5ee6ce39203cfbbea13c5244836141f205ee7c0823fcbb00fbc5dc83/async_gepa-0.1.0a1-py3-none-any.whl", hash = "sha256:7a256110bd086d3f417ab279827927e1c26f23d29ab8a041d9132792c63af8c4", size = 403649, upload-time = "2026-11-24T01:42:17.694Z" },
+]
 
 [[package]]
 name = "attrs"
@@ -5491,7 +5498,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "async-gepa", marker = "extra == 'optim'", git = "https://github.com/DGoettlich/async-gepa.git?branch=rework%2F09-benchmark-integration" },
+    { name = "async-gepa", marker = "extra == 'optim'" },
     { name = "httpx", marker = "extra == 'vllm'" },
     { name = "instructor", marker = "extra == 'optim'", specifier = ">=1.17" },
     { name = "litellm", marker = "extra == 'optim'", specifier = ">=1.83,<1.92" },
