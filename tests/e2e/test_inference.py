@@ -188,3 +188,33 @@ def test_packed_training_targets_follow_queries(checkpoint):
     loss.backward()
     assert model.engine.model.decision_head.network[-1].weight.grad.isfinite().all()
     model.stop()
+
+
+def test_dcp_loading_and_hf_export_preserve_predictions(checkpoint, tmp_path):
+    import torch.distributed.checkpoint as dcp  # noqa: PLC0415 -- checkpoint exercise.
+
+    from social_jev.transformers import SocialJevModel  # noqa: PLC0415 -- model export.
+
+    original = SocialJev.from_pretrained(checkpoint, dtype=torch.bfloat16)
+    expected = original.query(requests())
+    saved = tmp_path / "step-10"
+    state = dict(original.engine.model.state_dict())
+    state["optimizer"] = {"exp_avg": torch.ones(4)}
+    with pytest.warns(UserWarning, match="torch.distributed"):
+        dcp.save(state, checkpoint_id=saved, no_dist=True)
+    original.engine.model.config.save_pretrained(saved)
+    original.processor.tokenizer.save_pretrained(saved)
+    with pytest.warns(UserWarning, match="torch.distributed"):
+        loaded = SocialJev.from_pretrained(saved)
+    assert loaded.engine.model.dtype == torch.bfloat16
+    assert loaded.query(requests()) == expected
+    assert loaded.processor.tokenizer.chat_template == original.processor.tokenizer.chat_template
+
+    destination = tmp_path / "hf-export"
+    loaded.engine.model.save_pretrained(destination, max_shard_size="5GB")
+    restored = SocialJevModel.from_pretrained(destination, dtype="auto")
+    for name, value in original.engine.model.state_dict().items():
+        torch.testing.assert_close(restored.state_dict()[name], value)
+    assert restored.tokenizer.get_vocab() == original.processor.tokenizer.get_vocab()
+    original.stop()
+    loaded.stop()

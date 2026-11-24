@@ -108,9 +108,8 @@ class SocialJev:
         if provider is not None:
             remote = provider.start(str(repo), backend=backend, serve=serve, **kwargs)
             return cls(None, None, serve=serve, remote=remote)
-        source = Path(repo)
-        if source.is_dir():
-            repo = str(source.resolve())
+        if isinstance(repo, Path):
+            repo = repo.expanduser().resolve()
         else:
             checkpoint_config = SocialJevConfig.from_pretrained(
                 repo,
@@ -127,6 +126,7 @@ class SocialJev:
             engine = TransformersEngine(repo, **kwargs)
             tokenizer = engine.tokenizer
         else:
+            repo = str(repo)
             tokenizer = AutoTokenizer.from_pretrained(repo, revision=kwargs.get("revision"))
             if serve:
                 from .vllm.server import Server  # noqa: PLC0415
