@@ -155,10 +155,13 @@ class SocialJev:
         ]
         scores = {}
         for name, metric in named_metrics.items():
-            indices = [i for i, names in enumerate(selected_metrics) if name in names]
-            if indices:
+            # find the submitted queries that requested this metric
+            queries_for_metric = [i for i, names in enumerate(selected_metrics) if name in names]
+            if queries_for_metric:
+                # apply metric to selected queries
                 scores[name] = metric(
-                    [probabilities[i] for i in indices], [labels[i] for i in indices]
+                    [probabilities[i] for i in queries_for_metric],
+                    [labels[i] for i in queries_for_metric],
                 )
         return EvaluationResult(scores=scores, predictions=predictions, labels=labels)
 
