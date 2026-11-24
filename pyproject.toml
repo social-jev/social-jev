@@ -11,7 +11,7 @@ dependencies = ["torch>=2.13", "transformers>=5.17,<6", "pydantic>=2"]
 [project.optional-dependencies]
 compute = ["modal", "vastai", "httpx", "fastapi", "uvicorn", "huggingface-hub>=1.33"]
 vllm = ["vllm==0.31.0", "httpx"]
-optim = ["async-gepa", "instructor>=1.17", "litellm>=1.83,<1.92"]
+optim = ["async-gepa", "instructor>=1.17"]
 
 [project.entry-points."vllm.general_plugins"]
 social_jev = "social_jev.vllm.plugin:register"
@@ -139,4 +139,4 @@ known_first_party = ["social_jev", "fineweb"]
 DEP004 = ["datasets", "prometheus_client"]
 
 [tool.uv.sources]
-async-gepa = { git = "https://github.com/DGoettlich/async-gepa.git", branch = "continuous-rollouts" }
+async-gepa = { git = "https://github.com/DGoettlich/async-gepa.git", branch = "main" }

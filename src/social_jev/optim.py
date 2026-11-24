@@ -7,17 +7,14 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from async_gepa import (  # ty: ignore[unresolved-import]
-    ContinuousRollouts,
-    EvaluationBatch,
-    RolloutResult,
-)
+from async_gepa import EvaluationBatch
+from async_gepa.strategies.scheduling import ContinuousRollouts
 from pydantic import ValidationInfo, field_validator
 
 from .types import Query, Request
 
 if TYPE_CHECKING:
-    from async_gepa import GEPAResult  # ty: ignore[unresolved-import]
+    from async_gepa import GEPAResult
 
 DEFAULT_REFLECTION_MODEL = "openrouter/z-ai/glm-5.3-flash"
 
@@ -140,7 +137,7 @@ def get_proposer_kwargs(kwargs):
 
 def make_default_proposer(template, model_kwargs):
     """Use Instructor to validate and retry invalid OpenRouter rewrites."""
-    import instructor  # noqa: PLC0415  # ty: ignore[unresolved-import]
+    import instructor  # noqa: PLC0415
 
     client = instructor.from_provider(DEFAULT_REFLECTION_MODEL, **model_kwargs)
     query_template = template["query"] if isinstance(template, dict) else template
@@ -205,30 +202,45 @@ class GEPAAdapter:
                     "metric_feedback": feedback,
                 },
             }
-        return RolloutResult(output=probabilities, score=score, trace=trace)
+        return probabilities, score, trace
+
+    def evaluation_batch(self, query, batch, rows, *, capture_traces):
+        """Assemble scores and reflection traces in example order."""
+        result = EvaluationBatch(
+            outputs=[],
+            scores=[],
+            trajectories=[] if capture_traces else None,
+        )
+        for example, (prediction,) in zip(batch, rows, strict=True):
+            output, score, trace = self.score(
+                query,
+                example,
+                prediction,
+                capture_traces=capture_traces,
+            )
+            result.outputs.append(output)
+            result.scores.append(score)
+            if result.trajectories is not None:
+                result.trajectories.append(trace)
+        return result
 
     def evaluate(self, batch, candidate, capture_traces=False):
         """Evaluate a batch for GEPA's standard loop."""
         query = self.candidate_query(candidate)
         requests = [Request(state=example["state"], queries=[query]) for example in batch]
         rows = self.model.query(requests)
-        rollouts = [
-            self.score(query, example, prediction, capture_traces=capture_traces)
-            for example, (prediction,) in zip(batch, rows, strict=True)
-        ]
-        return EvaluationBatch(
-            outputs=[rollout.output for rollout in rollouts],
-            scores=[rollout.score for rollout in rollouts],
-            trajectories=[rollout.trace for rollout in rollouts] if capture_traces else None,
-        )
-
-    async def evaluate_one(self, candidate, example, *, capture_traces):
-        """Evaluate one example for continuous rollouts."""
-        query = self.candidate_query(candidate)
-        request = Request(state=example["state"], queries=[query])
-        ((prediction,),) = await self.model.aquery(request)
-        return self.score(query, example, prediction, capture_traces=capture_traces)
+        return self.evaluation_batch(query, batch, rows, capture_traces=capture_traces)
 
     def make_reflective_dataset(self, candidate, eval_batch, components_to_update):  # noqa: ARG002
         """Make training traces available to GEPA's proposer."""
         return {component: eval_batch.trajectories or [] for component in components_to_update}
+
+
+class AsyncGEPAAdapter(GEPAAdapter):
+    """Await model requests for GEPA's continuous rollout scheduler."""
+
+    async def evaluate(self, batch, candidate, capture_traces=False):
+        query = self.candidate_query(candidate)
+        requests = [Request(state=example["state"], queries=[query]) for example in batch]
+        rows = await self.model.aquery(requests)
+        return self.evaluation_batch(query, batch, rows, capture_traces=capture_traces)

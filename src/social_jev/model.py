@@ -165,9 +165,10 @@ class SocialJev:
         are enabled by default and use the async vLLM backend. Other optimizer
         arguments, including the sampling strategy and budget, go to AsyncGEPA.
         """
-        from async_gepa import optimize  # noqa: PLC0415  # ty: ignore[unresolved-import]
+        from async_gepa import optimize  # noqa: PLC0415
 
         from social_jev.optim import (  # noqa: PLC0415
+            AsyncGEPAAdapter,
             GEPAAdapter,
             OptimizationResult,
             accuracy,
@@ -175,8 +176,11 @@ class SocialJev:
             get_scheduler_kwargs,
         )
 
-        adapter = GEPAAdapter(self, query, accuracy if metric is None else metric)
         scheduler_kwargs = get_scheduler_kwargs(kwargs)
+        adapter_class = (
+            AsyncGEPAAdapter if scheduler_kwargs["scheduler"] is not None else GEPAAdapter
+        )
+        adapter = adapter_class(self, query, accuracy if metric is None else metric)
         proposer_kwargs = get_proposer_kwargs(kwargs)
         result = optimize(
             seed_candidate={"query": query.model_dump_json()},
