@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: false
-      - run: uv sync --locked --group dev
+      - run: uv sync --group dev
       - run: uv run --frozen prek run --all-files
 
   build:
