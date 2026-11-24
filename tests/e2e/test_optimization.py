@@ -33,7 +33,7 @@ def test_evaluation_accuracy_counts_exact_matches():
     query = Query(text="improved", options=["Even", "Odd"])
     data = [{"state": "2", "label": 0}, {"state": "4", "label": 1}]
 
-    assert model.evaluate(query=query, data=data).score == 0.5
+    assert model.evaluate(queries=query, data=data).scores["accuracy"] == 0.5
 
 
 def test_evaluation_f1_uses_first_option():
@@ -47,7 +47,7 @@ def test_evaluation_f1_uses_first_option():
         {"state": "3", "label": 1},
     ]
 
-    assert model.evaluate(query=query, data=data, metric=f1).score == pytest.approx(2 / 3)
+    assert model.evaluate(queries=query, data=data, metrics=f1).scores["f1"] == pytest.approx(2 / 3)
 
 
 @pytest.mark.skipif(
