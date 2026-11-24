@@ -156,6 +156,8 @@ def make_default_proposer(template, model_kwargs):
         )
         return {"query": query.model_dump_json()}
 
+    # these reflection calls can run concurrently
+    propose.independent = True  # ty: ignore[unresolved-attribute]
     return propose
 
 
