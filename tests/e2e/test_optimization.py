@@ -3,7 +3,6 @@
 import json
 from importlib.util import find_spec
 
-import httpx
 import pytest
 
 from social_jev import Query, Result, SocialJev
@@ -30,7 +29,7 @@ class ParityModel(SocialJev):
 
 def test_evaluation_accuracy_counts_exact_matches():
     """Average correct and incorrect predictions with the default metric."""
-    model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
+    model = ParityModel(processor=None, engine=None)
     query = Query(text="improved", options=["Even", "Odd"])
     data = [{"state": "2", "label": 0}, {"state": "4", "label": 1}]
 
@@ -39,7 +38,7 @@ def test_evaluation_accuracy_counts_exact_matches():
 
 def test_evaluation_f1_uses_first_option():
     """Distinguish first-option and second-option F1 on asymmetric predictions."""
-    model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
+    model = ParityModel(processor=None, engine=None)
     query = Query(text="improved", options=["Even", "Odd"])
     data = [
         {"state": "0", "label": 0},
@@ -58,6 +57,7 @@ def test_evaluation_f1_uses_first_option():
 @pytest.mark.parametrize("continuous", [True, False])
 def test_optimization_returns_the_winning_query_and_scores(monkeypatch, continuous):
     """Retry an invalid default rewrite and accept a valid rewrite through either loop."""
+    httpx = pytest.importorskip("httpx2")
     original = Query(text="initial", options=["Even", "Odd"])
     improved = Query(text="improved", options=["Even", "Odd"])
     trainset = [{"state": "2", "label": 0}, {"state": "3", "label": 1}]
@@ -105,12 +105,14 @@ def test_optimization_returns_the_winning_query_and_scores(monkeypatch, continuo
 
     if continuous:
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-        monkeypatch.setattr(httpx.Client, "send", lambda _, request, **_kwargs: reflect(request))
+        monkeypatch.setattr(
+            httpx.HTTPTransport, "handle_request", lambda _, request: reflect(request)
+        )
         kwargs = {"max_in_flight_proposals": 1}
     else:
         kwargs = {"scheduler": None, "custom_candidate_proposer": propose}
 
-    model = ParityModel(processor=None, engine=None)  # ty: ignore[invalid-argument-type]
+    model = ParityModel(processor=None, engine=None)
     optimization = model.optimize(
         query=original,
         trainset=trainset,
