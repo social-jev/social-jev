@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import torch
@@ -42,7 +42,7 @@ from transformers import AutoTokenizer
 
 from ..config import SocialJevConfig
 from ..data import SampleStep, packed_batches
-from ..transformers import SocialJevModel
+from ..transformers import SocialJevModel, is_dcp_checkpoint
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 
 if TYPE_CHECKING:
@@ -63,7 +63,9 @@ class TitanTokenizer(Configurable):
 
     def __init__(self, config, tokenizer_path):
         del config
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        self.tokenizer = cast(
+            "PreTrainedTokenizerBase", AutoTokenizer.from_pretrained(tokenizer_path)
+        )
 
 
 class TitanLoader(BaseDataLoader):
@@ -197,6 +199,53 @@ def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
     return model
 
 
+class TrainingCheckpointManager(CheckpointManager):
+    """Load the requested source once and save complete checkpoints."""
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(CheckpointManager.Config):
+        pass
+
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
+        self.model = kwargs["model_parts"][0]
+        self.loaded = False
+        self.tokenizer: PreTrainedTokenizerBase
+
+    def load(self, step=-1):
+        """Restore the explicit source, regardless of the output directory."""
+        del step
+        if self.loaded:
+            return False
+        assert self.initial_load_path is not None
+        if self.initial_load_in_hf:
+            weights = get_model_state_dict(self.model)
+            dcp.load(
+                weights,
+                storage_reader=dcp.HuggingFaceStorageReader(self.initial_load_path),
+            )
+            set_model_state_dict(self.model, weights)
+        else:
+            # titan selects and restores all registered training state
+            self.dcp_load(
+                self._states_to_load(model_only=False),
+                checkpoint_id=self.initial_load_path,
+                from_hf=False,
+                from_quantized=False,
+            )
+        self.loaded = True
+        return True
+
+    def save(self, curr_step, last_step=False):
+        """Save training state and its configuration/tokenizer assets."""
+        saved = super().save(curr_step, last_step)
+        if saved and dist.get_rank() == 0:
+            directory = Path(self.folder) / f"step-{curr_step}"
+            self.model.config.save_pretrained(directory)
+            self.tokenizer.save_pretrained(directory)
+        return saved
+
+
 class TitanTrainer(TorchTitanTrainer):
     """Run TorchTitan with one loss item per query."""
 
@@ -206,13 +255,12 @@ class TitanTrainer(TorchTitanTrainer):
         run_dir: str
 
     config: Config
+    checkpointer: TrainingCheckpointManager
+    tokenizer: TitanTokenizer
 
     def __init__(self, config):
         super().__init__(config)
-        model = self.model_parts[0]
-        weights = get_model_state_dict(model)
-        dcp.load(weights, storage_reader=dcp.HuggingFaceStorageReader(config.hf_assets_path))
-        set_model_state_dict(model, weights)
+        self.checkpointer.tokenizer = self.tokenizer.tokenizer
 
     def init_distributed(self):
         """Initialize ranks and resolve their shared output directory."""
@@ -311,9 +359,12 @@ class TitanTrainer(TorchTitanTrainer):
             hf_assets_path=str(checkpoint),
             run_dir=str(run_dir),
             dump_folder=str(run_dir),
-            checkpoint=CheckpointManager.Config(
+            checkpoint=TrainingCheckpointManager.Config(
                 enable=True,
                 folder=".",
+                initial_load_path=str(checkpoint),
+                initial_load_in_hf=not is_dcp_checkpoint(checkpoint),
+                initial_load_model_only=not is_dcp_checkpoint(checkpoint),
                 interval=config.checkpoint_steps or config.steps,
                 last_save_model_only=False,
                 last_save_in_hf=False,
@@ -468,7 +519,7 @@ class Trainer:
 
         checkpoint = (
             Path(self.repo).expanduser().resolve()
-            if Path(self.repo).expanduser().is_dir()
+            if isinstance(self.repo, Path)
             else Path(snapshot_download(str(self.repo), revision=self.revision))
         )
         environment = {}
@@ -493,6 +544,7 @@ class Trainer:
                 trainer = TitanTrainer.from_checkpoint(
                     checkpoint, self.config, self.trainset, self.valset, self.run_dir
                 )
+                trainer.checkpointer.load()
                 if final_save_to is None and dist.get_rank() == 0:
                     logger.warning(
                         "No final HF export is configured. "

@@ -2,6 +2,8 @@
 
 from contextlib import nullcontext
 from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
@@ -18,6 +20,7 @@ pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training.trainer import (
+    TitanLoader,
     TitanModel,
     TitanTrainer,
     Trainer,
@@ -141,6 +144,10 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
         events.append(("validate", step))
         validator.last_step = step
 
+    def restore():
+        trainer.step = 2
+        events.append(("load", 2))
+
     def train():
         events.append(("train", trainer.step))
         trainer.step = 3
@@ -150,6 +157,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
     trainer = SimpleNamespace(
         step=0,
         config=SimpleNamespace(dump_folder="run"),
+        checkpointer=SimpleNamespace(load=restore),
         validator=validator,
         train=train,
         model_parts=[model],
@@ -170,7 +178,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
         run_dir=None,
         final_save_to=None,
     )
-    assert events == [("validate", 0), ("train", 0), ("validate", 3), ("close", 3)]
+    assert events == [("load", 2), ("validate", 2), ("train", 2), ("validate", 3), ("close", 3)]
     assert trained is None
 
 
@@ -197,7 +205,7 @@ def test_default_run_directory_keeps_checkpointing_enabled(monkeypatch):
     monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
     trainer = Trainer(TrainConfig(steps=3, checkpoint_steps=1), repo="org/model", trainset=source)
     config = TitanTrainer.from_checkpoint(
-        "checkpoint", trainer.config, source, None, trainer.run_dir
+        Path("checkpoint").resolve(), trainer.config, source, None, trainer.run_dir
     )
     assert config.run_dir == "artifacts/train-%Y-%m-%d--%H-%M"
     assert config.checkpoint.enable
@@ -246,6 +254,7 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
     trainer = SimpleNamespace(
         step=0,
         config=SimpleNamespace(dump_folder="run"),
+        checkpointer=SimpleNamespace(load=Mock()),
         train=Mock(),
         model_parts=[model],
         tokenizer=SimpleNamespace(tokenizer=object()),
@@ -290,7 +299,7 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
         model.to_hf.assert_not_called()
 
 
-def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
+def test_final_checkpoint_retains_optimizer_state(checkpoint, tmp_path, monkeypatch):  # noqa: PLR0915 -- save, perturb and restore the full training state.
     from torchtitan.components.optimizer import (  # noqa: PLC0415 -- optional runtime.
         LRSchedulersContainer,
         OptimizersContainer,
@@ -307,6 +316,18 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
     manager = None
     try:
         model = torch.nn.Linear(2, 1)
+        loaded = SocialJev.from_pretrained(checkpoint)
+        model.config = loaded.engine.model.config
+        loader = TitanLoader(
+            TitanLoader.Config(source=source),
+            dp_rank=0,
+            dp_world_size=1,
+            tokenizer=SimpleNamespace(tokenizer=loaded.processor.tokenizer),
+            seq_len=64,
+            local_batch_size=1,
+        )
+        loader.consumed = 2
+        state = {"step": 2}
         optimizers = OptimizersContainer.Config(
             param_groups=[
                 ParamGroupConfig(
@@ -325,14 +346,15 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
         expected_lr = optimizer.param_groups[0]["lr"]
         expected_scheduler = schedulers.state_dict()
         manager = config.checkpoint.build(
-            dataloader=None,
+            dataloader=loader,
             model_parts=[model],
             optimizers=optimizers,
             lr_schedulers=schedulers,
-            states={"train_state": {"step": 2}},
+            states={"train_state": state},
             sd_adapter=None,
             base_folder=str(tmp_path / "run"),
         )
+        manager.tokenizer = loaded.processor.tokenizer
         save = Mock(wraps=manager.dcp_save)
         monkeypatch.setattr(manager, "dcp_save", save)
         assert not manager.save(1)
@@ -349,9 +371,32 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
             value.zero_()
         with torch.no_grad():
             model.weight.zero_()
+        loader.consumed = 99
+        state["step"] = 99
+        manager.close()
+        manager = replace(
+            config.checkpoint,
+            initial_load_path=str(saved),
+            initial_load_in_hf=False,
+            initial_load_model_only=False,
+        ).build(
+            dataloader=loader,
+            model_parts=[model],
+            optimizers=optimizers,
+            lr_schedulers=schedulers,
+            states={"train_state": state},
+            sd_adapter=None,
+            base_folder=str(tmp_path / "run"),
+        )
         # torch titan recomputes the learning rate through get_lr() on restore
         with pytest.warns(UserWarning, match="To get the last learning rate"):
-            assert manager.load(step=2)
+            assert manager.load()
+        assert not manager.load()
+        assert loader.consumed == 2
+        assert state["step"] == 2
+        assert (saved / "config.json").is_file()
+        assert (saved / "tokenizer_config.json").is_file()
+        loaded.stop()
         torch.testing.assert_close(model.weight, expected)
         torch.testing.assert_close(optimizer.state[model.weight], expected_state)
         assert optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)
@@ -360,6 +405,41 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
         manager.close()
         assert (saved / ".metadata").is_file()
     finally:
+        if manager is not None:
+            manager.close()
+        torch.distributed.destroy_process_group()
+
+
+def test_training_initializes_from_hf_weights(checkpoint, tmp_path, monkeypatch):
+    monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
+    config = TitanTrainer.from_checkpoint(
+        checkpoint, TrainConfig(steps=1), source, None, tmp_path / "run"
+    )
+    torch.distributed.init_process_group(
+        "gloo", init_method=(tmp_path / "rendezvous").as_uri(), rank=0, world_size=1
+    )
+    manager = None
+    loaded = SocialJev.from_pretrained(checkpoint)
+    try:
+        model = TitanModel(TitanModel.Config(checkpoint=str(checkpoint), train_backbone=True))
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.zero_()
+        manager = config.checkpoint.build(
+            dataloader=None,
+            model_parts=[model],
+            optimizers=None,
+            lr_schedulers=None,
+            states={},
+            sd_adapter=None,
+            base_folder=str(tmp_path / "run"),
+        )
+        assert manager.load()
+        assert not manager.load()
+        for name, value in loaded.engine.model.state_dict().items():
+            torch.testing.assert_close(model.state_dict()[name], value)
+    finally:
+        loaded.stop()
         if manager is not None:
             manager.close()
         torch.distributed.destroy_process_group()

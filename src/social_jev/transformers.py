@@ -1,5 +1,6 @@
 """Offline Qwen3 execution with the trained scalar linear or MLP head."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -13,6 +14,11 @@ from .head import DecisionHeadConfig, ScalarHead
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
+
+
+def is_dcp_checkpoint(source: str | Path) -> bool:
+    """Identify a local distributed checkpoint."""
+    return isinstance(source, Path) and (source / ".metadata").is_file()
 
 
 class SocialJevModel(PreTrainedModel):
