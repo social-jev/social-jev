@@ -148,10 +148,10 @@ class SocialJev:
             data, queries=queries, metric_names=named_metrics
         )
         predictions = [prediction for results in self.query(requests) for prediction in results]
-        request_queries = [item_query for request in requests for item_query in request.queries]
+        submitted_queries = [query for request in requests for query in request.queries]
         probabilities = [
-            [prediction.probabilities[option] for option in item_query.options]
-            for prediction, item_query in zip(predictions, request_queries, strict=True)
+            [prediction.probabilities[option] for option in query.options]
+            for prediction, query in zip(predictions, submitted_queries, strict=True)
         ]
         scores = {}
         for name, metric in named_metrics.items():
