@@ -12,11 +12,12 @@ from random import Random
 from typing import TYPE_CHECKING, Literal, cast
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 
 from .types import OptionLabels, Request, Result
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Iterator
 
     from transformers import PreTrainedTokenizerBase
 
@@ -35,42 +36,28 @@ class Sample:
     """One reference target per query."""
     metadata: dict[str, str] = field(default_factory=dict)
     """Caller-supplied categories for reporting."""
-    query_ids: list[int] = field(default_factory=list)
-    """Positions of the queries in the original inference request batch."""
 
-    def __post_init__(self):  # noqa: C901 -- validate roles and their aligned targets.
-        roles = [message["role"] for message in self.messages]
-        groups: list[list[str]] = []
-        if not roles or roles[0] != "state":
-            message = "A sample must start with a state message."
-            raise ValueError(message)
-        for entry in self.messages[1:]:
-            role = entry["role"]
-            if role == "query":
-                groups.append([])
-            elif role == "option" and groups:
-                groups[-1].append(entry["content"])
-            elif role != "example" or not groups or groups[-1]:
-                message = "Expected a query, optional examples, and then its options."
-                raise ValueError(message)
-        if not groups or any(
-            not options or len(set(options)) != len(options) for options in groups
-        ):
-            message = "Each query requires distinct answer options."
-            raise ValueError(message)
+    def __post_init__(self):  # noqa: C901 -- keep the label contract together.
+        """Check that supplied labels match the query options."""
         if self.targets is None:
             return
-        if len(self.targets) != len(groups):
+        counts = []
+        for entry in self.messages:
+            if entry["role"] == "query":
+                counts.append(0)
+            elif entry["role"] == "option":
+                counts[-1] += 1
+        if len(self.targets) != len(counts):
             message = "Supply one target per query."
             raise ValueError(message)
-        for target, options in zip(self.targets, groups, strict=True):
+        for target, count in zip(self.targets, counts, strict=True):
             if isinstance(target, int):
-                if not 0 <= target < len(options):
+                if not 0 <= target < count:
                     message = "Target index is outside the query's options."
                     raise ValueError(message)
             elif (
-                len(target) != len(options)
-                or any(p < 0 for p in target)
+                len(target) != count
+                or any(value < 0 for value in target)
                 or not isclose(sum(target), 1.0, abs_tol=1e-6)
             ):
                 message = "Supply one nonnegative probability per option summing to one."
@@ -101,8 +88,6 @@ class TokenizedSample:
     """Targets aligned with the query messages."""
     metadata: list[dict[str, str]] = field(default_factory=list)
     """Reporting categories for each query."""
-    query_ids: list[int] = field(default_factory=list)
-    """Original inference positions for each query."""
 
     @classmethod
     def from_sample(cls, sample: Sample, tokenizer: PreTrainedTokenizerBase) -> TokenizedSample:
@@ -127,7 +112,6 @@ class TokenizedSample:
             roles,
             sample.targets,
             [sample.metadata] * roles.count("query"),
-            sample.query_ids,
         )
 
     def __len__(self) -> int:
@@ -147,58 +131,53 @@ class TokenizedSample:
             roles=self.roles[start:stop],
             targets=None if self.targets is None else self.targets[queries],
             metadata=self.metadata[queries],
-            query_ids=self.query_ids[queries],
         )
 
     def __add__(self, other: TokenizedSample) -> TokenizedSample:
         """Concatenate messages and adjust boundaries by the existing token length."""
+        targets = None
+        if self.targets is not None:
+            assert other.targets is not None
+            targets = self.targets + other.targets
         return TokenizedSample(
             ids=self.ids + other.ids,
             message_boundaries=self.message_boundaries
             + [end + len(self) for end in other.message_boundaries],
             roles=self.roles + other.roles,
-            targets=(
-                None
-                if self.targets is None and other.targets is None
-                else (self.targets or []) + (other.targets or [])
-            ),
+            targets=targets,
             metadata=self.metadata + other.metadata,
-            query_ids=self.query_ids + other.query_ids,
         )
 
-    def select_queries(self, start: int, stop: int | None = None) -> TokenizedSample | None:
-        queries = [index for index, role in enumerate(self.roles) if role == "query"]
-        stop = len(queries) if stop is None else stop
-        if start == stop:
-            return None
-        boundaries = [*queries, len(self.roles)]
-        return self[: queries[0]] + self[boundaries[start] : boundaries[stop]]
-
-    def split(
+    def split(  # noqa: C901 -- two explicit split modes, sharing message slicing.
         self, *, on: Literal["option", "query"] = "option", maximum: int | None = None
-    ) -> tuple[TokenizedSample | None, TokenizedSample | None]:
-        """Extract one option sequence or a fitting group of complete queries."""
-        queries = [index for index, role in enumerate(self.roles) if role == "query"]
+    ) -> Iterator[TokenizedSample]:
+        """Yield candidates, or groups of complete queries that fit the limit."""
+        state = self[:1]
         if on == "option":
-            option = self.roles.index("option")
-            fitting = self[:1] + self[queries[0] : queries[0] + 1] + self[option : option + 1]
-            end = queries[1] if len(queries) > 1 else len(self.roles)
-            remainder = (
-                self[:option] + self[option + 1 :] if option + 1 < end else self.select_queries(1)
-            )
-            return fitting, remainder
+            query = None
+            for index, role in enumerate(self.roles):
+                if role == "query":
+                    query = self[index : index + 1]
+                elif role == "option":
+                    assert query is not None
+                    yield state + query + self[index : index + 1]
+            return
 
         assert maximum is not None
         if len(self) <= maximum:
-            return self, None
-        starts = [0, *(end + 1 for end in self.message_boundaries)]
-        query_ends = [starts[index] for index in queries[1:]] + [len(self)]
-        count = 0
-        for end in query_ends:
-            if end > maximum:
-                break
-            count += 1
-        return self.select_queries(0, count), self.select_queries(max(count, 1))
+            yield self
+            return
+
+        starts = [index for index, role in enumerate(self.roles) if role == "query"]
+        state = self[: starts[0]]
+        chunk = state
+        for start, end in zip(starts, [*starts[1:], len(self.roles)], strict=True):
+            query = self[start:end]
+            if len(chunk) > len(state) and len(chunk) + len(query) > maximum:
+                yield chunk
+                chunk = state
+            chunk = chunk + query
+        yield chunk
 
 
 @dataclass
@@ -265,18 +244,16 @@ class PackedBatch:
     input_ids: torch.Tensor
     message_boundaries: list[list[int]]
     roles: list[list[str]]
-    query_ids: list[int]
     metadata: list[dict[str, str]]
     option_indices: torch.Tensor
     option_positions: torch.Tensor
     targets: OptionLabels | None
 
     @classmethod
-    def from_samples(cls, samples: list[TokenizedSample]) -> PackedBatch:  # noqa: C901 -- collate tokens and query targets in the same order.
-        """Collate token sequences and align target rows with query and option order."""
-        rows = [sample.ids for sample in samples]
+    def from_samples(cls, samples: list[TokenizedSample]) -> PackedBatch:  # noqa: C901 -- collate aligned options and labels together.
+        """Stack packed rows and align option coordinates, labels, and metadata."""
         groups: list[list[int]] = []
-        positions: list[tuple[int, int]] = []
+        positions = []
         for row, sample in enumerate(samples):
             for end, role in zip(sample.message_boundaries, sample.roles, strict=True):
                 if role == "query":
@@ -284,26 +261,41 @@ class PackedBatch:
                 elif role == "option":
                     groups[-1].append(len(positions))
                     positions.append((row, end))
-        width = max(map(len, groups))
+
         targets = None
         if samples[0].targets is not None:
-            labels = [label for sample in samples for label in sample.targets or []]
-            targets = torch.zeros((len(groups), width), dtype=torch.float32)
-            for row, (label, group) in enumerate(zip(labels, groups, strict=True)):
+            labels = []
+            for sample in samples:
+                assert sample.targets is not None
+                labels.extend(sample.targets)
+            distributions = []
+            for label, options in zip(labels, groups, strict=True):
                 if isinstance(label, int):
-                    targets[row, label] = 1
+                    distribution = torch.zeros(len(options))
+                    distribution[label] = 1.0
                 else:
-                    targets[row, : len(group)] = torch.tensor(label)
+                    distribution = torch.tensor(label, dtype=torch.float32)
+                distributions.append(distribution)
+            targets = pad_sequence(distributions, batch_first=True)
+
         return cls(
-            input_ids=torch.tensor(rows),
-            message_boundaries=[s.message_boundaries for s in samples],
-            roles=[s.roles for s in samples],
-            query_ids=[query for s in samples for query in s.query_ids],
-            metadata=[metadata for s in samples for metadata in s.metadata],
-            option_indices=torch.tensor([group + [-1] * (width - len(group)) for group in groups]),
+            input_ids=torch.tensor([sample.ids for sample in samples]),
+            message_boundaries=[sample.message_boundaries for sample in samples],
+            roles=[sample.roles for sample in samples],
+            metadata=[values for sample in samples for values in sample.metadata],
+            option_indices=pad_sequence(
+                [torch.tensor(group) for group in groups],
+                batch_first=True,
+                padding_value=-1,
+            ),
             option_positions=torch.tensor(positions),
             targets=targets,
         )
+
+    @property
+    def option_mask(self):
+        """Mark supplied options rather than padding columns."""
+        return self.option_indices >= 0
 
     def to(self, device) -> PackedBatch:
         """Move the tensors used by the model to its device."""
@@ -392,17 +384,11 @@ class FormatStep(Step[Sample]):
     def __init__(self, requests: list[Request]):
         """Initialize this call's request cursor."""
         self.requests = iter(requests)
-        self.query_id = 0
 
     def next(self) -> Sample | None:
         """Format the next complete request."""
         request = next(self.requests, None)
-        if request is None:
-            return None
-        sample = Sample.from_request(request)
-        sample.query_ids = list(range(self.query_id, self.query_id + len(request.queries)))
-        self.query_id += len(request.queries)
-        return sample
+        return None if request is None else Sample.from_request(request)
 
 
 class TokenizeStep(Step[TokenizedSample]):
@@ -443,20 +429,20 @@ class SplitStep(Step[TokenizedSample]):
         self.parent = parent
         self.split_on = split_on
         self.seq_len = seq_len
-        self.remainder: TokenizedSample | None = None
+        self.pending: Iterator[TokenizedSample] = iter(())
         self.warned = False
 
     def next(self) -> TokenizedSample | None:
         while True:
-            sample = self.remainder if self.remainder is not None else self.parent.next()
+            sample = next(self.pending, None)
             if sample is None:
-                return None
-            fitting, self.remainder = sample.split(on=self.split_on, maximum=self.seq_len)
-            if fitting is not None:
-                return fitting
-            if sample.targets is None:
-                message = "Query and its options exceed model context capacity."
-                raise ValueError(message)
+                source = self.parent.next()
+                if source is None:
+                    return None
+                self.pending = source.split(on=self.split_on, maximum=self.seq_len)
+                continue
+            if self.seq_len is None or len(sample) <= self.seq_len:
+                return sample
             if not self.warned:
                 warnings.warn(
                     "Skipped a query because its state, query, and options exceed seq_len. "
@@ -526,7 +512,7 @@ def packed_batches(
     batch_size: int,
     pad: bool = True,
 ) -> CollateStep:
-    """Build the shared packed training and Transformers inference pipeline."""
+    """Build packed batches for training and validation."""
     tokens = TokenizeStep(parent, tokenizer)
     split = SplitStep(tokens, split_on="query", seq_len=seq_len)
     packed = PackAndPadStep(split, seq_len, tokenizer.pad_token_id, pad=pad)

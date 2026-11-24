@@ -7,7 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from social_jev import Query, Request, SocialJev
-from social_jev.data import Sample, SampleStep, packed_batches
+from social_jev.data import FormatStep, Sample, SampleStep, packed_batches
 
 
 def requests():
@@ -146,7 +146,14 @@ def test_packed_transformers_matches_independent_candidates(checkpoint):
     encoded = model.processor.encode(items)
     expected = model.processor.decode(model.engine.process(encoded.inputs), encoded)
 
-    for packed, split in zip(model.query(items), expected, strict=True):
+    batch = packed_batches(
+        FormatStep(items), model.processor.tokenizer, seq_len=256, batch_size=1
+    ).next()
+    assert batch is not None
+    with torch.no_grad():
+        logits = model.engine.model(batch)
+    actual = model.processor.decode(logits[batch.option_mask].tolist(), encoded)
+    for packed, split in zip(actual, expected, strict=True):
         for result, reference in zip(packed, split, strict=True):
             assert result.probabilities == pytest.approx(reference.probabilities, abs=1e-6)
     model.stop()
@@ -173,7 +180,7 @@ def test_packed_training_targets_follow_queries(checkpoint):
         assert (row[boundaries[-1] + 1 :] == model.processor.tokenizer.pad_token_id).all()
     assert batch.targets is not None
     assert batch.targets.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
-    logits = model.engine.model.forward_packed(batch)
+    logits = model.engine.model(batch)
     assert logits.shape == batch.targets.shape
     assert torch.equal(logits.isneginf(), batch.option_indices < 0)
     log_probs = logits.float().log_softmax(-1).masked_fill(batch.option_indices < 0, 0)

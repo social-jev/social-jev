@@ -238,7 +238,7 @@ def test_training_export_roundtrip_preserves_weights_and_tokenizer(
     ).next()
     assert batch is not None
     with torch.no_grad():
-        torch.testing.assert_close(exported.forward_packed(batch), model(batch))
+        torch.testing.assert_close(exported(batch), model(batch))
     loaded.stop()
     restored.stop()
 

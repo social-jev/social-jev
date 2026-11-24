@@ -153,12 +153,6 @@ class TitanModel(SocialJevModel, Configurable):
         with torch.device(buffer_device or rotary.inv_freq.device):
             self.backbone.rotary_emb = type(rotary)(rotary.config)
 
-    def forward(self, input_ids, attention_mask=None):
-        """Score a packed batch or the base model input tensors."""
-        if attention_mask is None:
-            return self.forward_packed(input_ids)
-        return super().forward(input_ids, attention_mask)
-
     def to_hf(self, tokenizer) -> SocialJevModel | None:
         """Collect an ordinary Transformers model on rank zero."""
         weights = get_model_state_dict(
@@ -255,7 +249,7 @@ class Trainer(TorchTitanTrainer):
             with self.train_context():
                 logits = model(batch).float()
                 assert batch.targets is not None
-                losses = self.config.loss_fn(logits, batch.targets, batch.option_indices >= 0)
+                losses = self.config.loss_fn(logits, batch.targets, batch.option_mask)
                 loss = losses.sum() / count
                 loss.backward()
             if should_log:
@@ -412,7 +406,7 @@ class Validation(Validator):
                 logits = model(batch).float()
                 targets = batch.targets
                 assert targets is not None
-                losses = self.config.loss_fn(logits, targets, batch.option_indices >= 0)
+                losses = self.config.loss_fn(logits, targets, batch.option_mask)
                 total += losses.sum()
                 queries += len(targets)
                 observations.append((losses.to("cpu"), batch.metadata))

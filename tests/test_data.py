@@ -52,7 +52,6 @@ def tokenized(lengths, roles, targets=None):
         roles=roles,
         targets=targets,
         metadata=[{"task": str(index)} for index in range(count)],
-        query_ids=list(range(count)),
     )
 
 
@@ -93,14 +92,11 @@ def test_query_split_preserves_tokens_labels_and_metadata():
         ["state", "query", "option", "option", "query", "option", "option"],
         [0, [0.25, 0.75]],
     )
-    intact, remainder = original.split(on="query", maximum=8)
-    assert intact is original
-    assert remainder is None
+    assert list(original.split(on="query", maximum=8)) == [original]
     split = SplitStep(Source([original]), split_on="query", seq_len=5)
     rows = list(iter(split.next, None))
     assert [row.ids for row in rows] == [[0, 1, 2, 3, 4], [0, 1, 5, 6, 7]]
     assert [row.targets for row in rows] == [[0], [[0.25, 0.75]]]
-    assert [row.query_ids for row in rows] == [[0], [1]]
     assert [row.metadata for row in rows] == [[{"task": "0"}], [{"task": "1"}]]
     assert all(row.message_boundaries == [1, 2, 3, 4] for row in rows)
 
@@ -113,7 +109,6 @@ def test_option_split_keeps_query_and_option_order():
     split = SplitStep(Source([original]))
     rows = list(iter(split.next, None))
     assert [row.ids for row in rows] == [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 5, 6]]
-    assert [row.query_ids for row in rows] == [[0], [0], [1]]
     assert all(row.roles == ["state", "query", "option"] for row in rows)
 
 
@@ -128,7 +123,6 @@ def test_overlength_queries_warn_once_and_preserve_following_queries():
         output = list(iter(split.next, None))
     assert len(warnings) == 1
     assert len(output) == 1
-    assert output[0].query_ids == [2]
     assert output[0].ids == [0, 1, 12, 13]
 
 

@@ -8,14 +8,11 @@ from transformers import AutoTokenizer, PreTrainedModel, Qwen3Model
 
 from .attention import AttentionMask, Positions
 from .config import SocialJevConfig
-from .data import Batch, Encoded, FormatStep, packed_batches
+from .data import Batch, PackedBatch
 from .head import DecisionHeadConfig, ScalarHead
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
-
-    from .data import PackedBatch
-    from .types import Request, Result
 
 
 class SocialJevModel(PreTrainedModel):
@@ -50,35 +47,37 @@ class SocialJevModel(PreTrainedModel):
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(save_directory)
 
-    def forward(self, input_ids, attention_mask):
-        """Return raw logits from each candidate's last nonpadding token."""
-        hidden = self.backbone(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
-        ).last_hidden_state
-        rows = torch.arange(input_ids.shape[0], device=input_ids.device)
-        positions = attention_mask.sum(-1) - 1
-        return self.decision_head(hidden[rows, positions])
+    def forward(self, batch: Batch | PackedBatch):
+        """Return a tensor of scores arranged by query and option."""
+        input_ids = batch.input_ids
+        if isinstance(batch, PackedBatch):
+            mask = AttentionMask(batch).value
+            if self.backbone.config._attn_implementation != "flex_attention":
+                size, length = input_ids.shape
+                mask = create_mask(
+                    mask.mask_mod, size, 1, length, length, device=str(input_ids.device)
+                )
+            attention_mask = {"full_attention": mask}
+            position_ids = Positions(batch).value
+            option_positions = batch.option_positions
+            option_indices = batch.option_indices
+        else:
+            attention_mask = batch.attention_mask
+            position_ids = None
+            rows = torch.arange(input_ids.shape[0], device=input_ids.device)
+            positions = attention_mask.sum(dim=-1) - 1
+            option_positions = torch.stack((rows, positions), dim=-1)
+            option_indices = rows[:, None]
 
-    def forward_packed(self, batch: "PackedBatch"):
-        """Read one scalar for each option using the checkpoint attention rules."""
-        block_mask = AttentionMask(batch).value
-        mask = block_mask
-        if self.backbone.config._attn_implementation != "flex_attention":
-            size, length = batch.input_ids.shape
-            mask = create_mask(
-                block_mask.mask_mod, size, 1, length, length, device=str(batch.input_ids.device)
-            )
         hidden = self.backbone(
-            input_ids=batch.input_ids,
-            position_ids=Positions(batch).value,
-            attention_mask={"full_attention": mask},
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
             use_cache=False,
         ).last_hidden_state
-        rows, positions = batch.option_positions.unbind(dim=-1)
+        rows, positions = option_positions.unbind(dim=-1)
         scores = self.decision_head(hidden[rows, positions])
-        return scores[batch.option_indices.clamp(min=0)].masked_fill(
-            batch.option_indices < 0, -torch.inf
-        )
+        return scores[option_indices.clamp(min=0)].masked_fill(option_indices < 0, -torch.inf)
 
 
 class TransformersEngine:
@@ -113,30 +112,7 @@ class TransformersEngine:
             message = "Candidate sequence exceeds model context capacity"
             raise ValueError(message)
         batch = Batch.from_inputs(inputs, self.pad_id).to(self.model.device)
-        return (
-            self.model(input_ids=batch.input_ids, attention_mask=batch.attention_mask)
-            .float()
-            .tolist()
-        )
-
-    @torch.inference_mode()
-    def query(self, requests: "Request | list[Request]") -> "list[list[Result]]":
-        """Score packed requests and restore the original query order."""
-        assert self.model is not None
-        items = requests if isinstance(requests, list) else [requests]
-        maximum = self.model.config.backbone_config.max_position_embeddings
-        batches = packed_batches(
-            FormatStep(items), self.tokenizer, seq_len=maximum, batch_size=1, pad=False
-        )
-        scores = {}
-        while (batch := batches.next()) is not None:
-            logits = self.model.forward_packed(batch.to(self.model.device)).float().tolist()
-            counts = (batch.option_indices >= 0).sum(dim=-1).tolist()
-            for index, row, count in zip(batch.query_ids, logits, counts, strict=True):
-                scores[index] = row[:count]
-        return Encoded([], items).results(
-            [score for index in range(len(scores)) for score in scores[index]]
-        )
+        return self.model(batch).squeeze(-1).float().tolist()
 
     def stop(self):
         """Release the model weights."""
