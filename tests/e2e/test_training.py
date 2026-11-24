@@ -14,11 +14,11 @@ from torch.distributed import checkpoint as dcp
 
 from social_jev import SocialJev
 from social_jev.data import Sample, SampleStep, packed_batches
-from social_jev.training import BrierLoss, CrossEntropy, FocalLoss, TrainConfig
 
 pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
+from social_jev.training import BrierLoss, CrossEntropy, FocalLoss, TrainConfig
 from social_jev.training.trainer import (
     TitanLoader,
     TitanModel,

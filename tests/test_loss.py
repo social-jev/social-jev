@@ -2,6 +2,9 @@ import pytest
 import torch
 from torch.nn import functional
 
+pytest.importorskip("torchtitan")
+pytest.importorskip("triton")
+
 from social_jev.training import BrierCrossEntropy, BrierLoss, CrossEntropy, FocalLoss, TrainConfig
 
 
