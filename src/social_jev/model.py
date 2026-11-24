@@ -43,9 +43,6 @@ class SocialJev:
         >>> model.stop()  # doctest: +SKIP
     """
 
-    repo: str
-    revision: str | None
-
     def __init__(
         self,
         processor: Processor | None,
@@ -140,10 +137,7 @@ class SocialJev:
 
                 engine = VllmEngine(repo, **kwargs)
         processor = Processor(cast("PreTrainedTokenizerBase", tokenizer))
-        model = cls(processor, engine, serve=serve)
-        model.repo = str(repo)
-        model.revision = kwargs.get("revision")
-        return model
+        return cls(processor, engine, serve=serve)
 
     def query(self, requests: Request | list[Request]) -> list[list[Result]]:
         """Submit requests synchronously; results are ordered by document, then query."""
@@ -250,36 +244,25 @@ class SocialJev:
         else:
             self.engine.stop()
 
+    @staticmethod
     def train(  # noqa: PLR0913 -- public training inputs and output destinations.
-        self: SocialJev | None = None,
         *,
-        repo: str | None = None,
+        repo: str | Path,
         revision: str | None = None,
         trainset: Callable[[], Iterable[Sample]],
         valset: Callable[[], Iterable[Sample]] | None = None,
         config: TrainConfig,
-        run_dir: str | Path | None = "artifacts/train-%Y-%m-%d--%H-%M",
-        save: str | Path | None = None,
+        run_dir: str | Path | None = None,
+        final_save_to: str | Path | None = None,
     ) -> None:
-        """Post-train a checkpoint directly or hand off this model's devices."""
-        from .training.trainer import run  # noqa: PLC0415 -- optional training dependencies.
+        """Train from a checkpoint and save the requested outputs."""
+        from .training import Trainer  # noqa: PLC0415 -- optional training dependencies.
 
-        if repo is None:
-            if self is None:
-                message = "SocialJev.train() requires repo=."
-                raise TypeError(message)
-            if revision is not None:
-                message = "Supply repo= when overriding revision=."
-                raise TypeError(message)
-            repo, revision = self.repo, self.revision
-
-        run(
-            repo,
+        Trainer(
+            config,
+            repo=repo,
             revision=revision,
             trainset=trainset,
             valset=valset,
-            config=config,
             run_dir=run_dir,
-            save=save,
-            stop_inference=None if self is None else self.stop,
-        )
+        ).run(final_save_to=final_save_to)

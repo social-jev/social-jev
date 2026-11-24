@@ -19,9 +19,9 @@ pytest.importorskip("triton")
 
 from social_jev.training.trainer import (
     TitanModel,
+    TitanTrainer,
     Trainer,
     Validation,
-    run,
 )
 
 
@@ -97,7 +97,7 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
     # exercise the actual update without initializing CUDA or distributed startup
     scheduler = Mock()
     trainer = cast(
-        "Trainer",
+        "TitanTrainer",
         SimpleNamespace(
             config=SimpleNamespace(loss_fn=loss_fn, training=SimpleNamespace(max_norm=100.0)),
             model_parts=[model],
@@ -114,7 +114,7 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
             ntokens_seen=0,
         ),
     )
-    Trainer.train_step(trainer, iter(inputs))
+    TitanTrainer.train_step(trainer, iter(inputs))
 
     expected = torch.cat(
         [
@@ -149,25 +149,26 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
     validator.validate = validate
     trainer = SimpleNamespace(
         step=0,
+        config=SimpleNamespace(dump_folder="run"),
         validator=validator,
         train=train,
         model_parts=[model],
         tokenizer=SimpleNamespace(tokenizer=None),
         close=lambda: events.append(("close", 3)),
     )
-    monkeypatch.setattr(Trainer, "from_checkpoint", lambda *_args: trainer)
+    monkeypatch.setattr(TitanTrainer, "from_checkpoint", lambda *_args: trainer)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
     monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
-    trained = run(
-        checkpoint,
+    trained = SocialJev.train(
+        repo=checkpoint,
         revision=None,
         trainset=source,
         valset=source,
         config=TrainConfig(steps=3),
         run_dir=None,
-        save=None,
-        stop_inference=None,
+        final_save_to=None,
     )
     assert events == [("validate", 0), ("train", 0), ("validate", 3), ("close", 3)]
     assert trained is None
@@ -176,8 +177,8 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
 @pytest.mark.parametrize(("shards", "replicas"), [(1, 4), (2, 2), (4, 1)])
 def test_training_configures_replication_and_checkpoints(tmp_path, monkeypatch, shards, replicas):
     monkeypatch.setenv("WORLD_SIZE", "4")
-    monkeypatch.setattr(Trainer.Config, "build", lambda self: self)
-    config = Trainer.from_checkpoint(
+    monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
+    config = TitanTrainer.from_checkpoint(
         tmp_path,
         TrainConfig(steps=100, data_parallel_shard_degree=shards, checkpoint_steps=25),
         source,
@@ -192,21 +193,15 @@ def test_training_configures_replication_and_checkpoints(tmp_path, monkeypatch, 
     assert config.model_spec.parallelize_fn.keywords["reduce_dtype"] == torch.float32
 
 
-def test_run_without_directory_rejects_checkpoint_interval_before_loading(monkeypatch):
-    download = Mock()
-    monkeypatch.setattr("social_jev.training.trainer.snapshot_download", download)
-    with pytest.raises(ValueError, match="checkpoint_steps requires run_dir"):
-        run(
-            "org/model",
-            revision=None,
-            trainset=source,
-            valset=None,
-            config=TrainConfig(steps=3, checkpoint_steps=1),
-            run_dir=None,
-            save=None,
-            stop_inference=None,
-        )
-    download.assert_not_called()
+def test_default_run_directory_keeps_checkpointing_enabled(monkeypatch):
+    monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
+    trainer = Trainer(TrainConfig(steps=3, checkpoint_steps=1), repo="org/model", trainset=source)
+    config = TitanTrainer.from_checkpoint(
+        "checkpoint", trainer.config, source, None, trainer.run_dir
+    )
+    assert config.run_dir == "artifacts/train-%Y-%m-%d--%H-%M"
+    assert config.checkpoint.enable
+    assert config.checkpoint.interval == 1
 
 
 def test_training_export_roundtrip_preserves_weights_and_tokenizer(
@@ -250,14 +245,16 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
     model.to_hf.return_value = None if destination == "other-rank" else exported
     trainer = SimpleNamespace(
         step=0,
+        config=SimpleNamespace(dump_folder="run"),
         train=Mock(),
         model_parts=[model],
         tokenizer=SimpleNamespace(tokenizer=object()),
         close=Mock(),
     )
-    monkeypatch.setattr(Trainer, "from_checkpoint", lambda *_args: trainer)
+    monkeypatch.setattr(TitanTrainer, "from_checkpoint", lambda *_args: trainer)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
     save = tmp_path / "export" if destination == "local" else "org/model"
     if destination == "none":
         save = None
@@ -269,15 +266,14 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
         else nullcontext()
     )
     with context:
-        result = run(
-            tmp_path,
+        result = SocialJev.train(
+            repo=tmp_path,
             revision=None,
             trainset=source,
             valset=None,
             config=TrainConfig(steps=1),
             run_dir=None,
-            save=save,
-            stop_inference=None,
+            final_save_to=save,
         )
         assert result is None
     trainer.close.assert_called_once()
@@ -301,8 +297,8 @@ def test_final_checkpoint_retains_optimizer_state(tmp_path, monkeypatch):
         ParamGroupConfig,
     )
 
-    monkeypatch.setattr(Trainer.Config, "build", lambda self: self)
-    config = Trainer.from_checkpoint(
+    monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
+    config = TitanTrainer.from_checkpoint(
         tmp_path, TrainConfig(steps=2, checkpoint_steps=2), source, None, tmp_path / "run"
     )
     torch.distributed.init_process_group(

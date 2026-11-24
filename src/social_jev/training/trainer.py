@@ -36,6 +36,7 @@ from torchtitan.distributed import utils as dist_utils
 from torchtitan.distributed.fsdp import disable_fsdp_gradient_division
 from torchtitan.protocols.model import BaseModel
 from torchtitan.protocols.model_spec import ModelSpec
+from torchtitan.tools.logging import logger
 from torchtitan.trainer import Trainer as TorchTitanTrainer
 from transformers import AutoTokenizer
 
@@ -196,13 +197,13 @@ def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
     return model
 
 
-class Trainer(TorchTitanTrainer):
+class TitanTrainer(TorchTitanTrainer):
     """Run TorchTitan with one loss item per query."""
 
     @dataclass(kw_only=True, slots=True)
     class Config(TorchTitanTrainer.Config):
         loss_fn: Loss
-        run_dir: str | None
+        run_dir: str
 
     config: Config
 
@@ -216,15 +217,14 @@ class Trainer(TorchTitanTrainer):
     def init_distributed(self):
         """Initialize ranks and resolve their shared output directory."""
         parallel_dims = super().init_distributed()
-        if self.config.run_dir is not None:
-            directory = [
-                datetime.now().astimezone().strftime(self.config.run_dir)
-                if dist.get_rank() == 0
-                else None
-            ]
-            dist.broadcast_object_list(directory, src=0)
-            assert directory[0] is not None
-            self.config.dump_folder = directory[0]
+        directory = [
+            datetime.now().astimezone().strftime(self.config.run_dir)
+            if dist.get_rank() == 0
+            else None
+        ]
+        dist.broadcast_object_list(directory, src=0)
+        assert directory[0] is not None
+        self.config.dump_folder = directory[0]
         return parallel_dims
 
     def train_step(self, data_iterator):
@@ -309,10 +309,10 @@ class Trainer(TorchTitanTrainer):
                 state_dict_adapter=None,
             ),
             hf_assets_path=str(checkpoint),
-            run_dir=None if run_dir is None else str(run_dir),
-            dump_folder="." if run_dir is None else str(run_dir),
+            run_dir=str(run_dir),
+            dump_folder=str(run_dir),
             checkpoint=CheckpointManager.Config(
-                enable=run_dir is not None,
+                enable=True,
                 folder=".",
                 interval=config.checkpoint_steps or config.steps,
                 last_save_model_only=False,
@@ -440,61 +440,84 @@ def metadata_metrics(observations, prefix, group):
     }
 
 
-def run(repo, *, revision, trainset, valset, config, run_dir, save, stop_inference):  # noqa: C901, PLR0912, PLR0913 -- own the training process and cleanup.
-    """Load source weights and run TorchTitan on the available GPUs."""
-    if run_dir is None and config.checkpoint_steps is not None:
-        message = "checkpoint_steps requires run_dir."
-        raise ValueError(message)
-    if not torch.cuda.is_available():
-        message = "TorchTitan training requires a CUDA device."
-        raise RuntimeError(message)
+class Trainer:
+    """Own a training session from checkpoint loading through cleanup."""
 
-    checkpoint = (
-        Path(repo).resolve()
-        if Path(repo).is_dir()
-        else Path(snapshot_download(repo, revision=revision))
-    )
-    environment = {}
-    if "LOCAL_RANK" not in os.environ:
-        # give a direct single-device call the same process settings as torchrun
-        with socket.socket() as server:
-            server.bind(("127.0.0.1", 0))
-            port = str(server.getsockname()[1])
-        environment = {
-            "LOCAL_RANK": "0",
-            "RANK": "0",
-            "WORLD_SIZE": "1",
-            "MASTER_ADDR": "127.0.0.1",
-            "MASTER_PORT": port,
-        }
+    def __init__(  # noqa: PLR0913 -- session inputs.
+        self,
+        config: TrainConfig,
+        *,
+        repo: str | Path,
+        trainset,
+        valset=None,
+        revision=None,
+        run_dir: str | Path | None = None,
+    ):
+        self.config = config
+        self.repo = repo
+        self.revision = revision
+        self.trainset = trainset
+        self.valset = valset
+        self.run_dir = "artifacts/train-%Y-%m-%d--%H-%M" if run_dir is None else run_dir
 
-    if stop_inference is not None:
-        stop_inference()
-        torch.cuda.empty_cache()
+    def run(self, *, final_save_to: str | Path | None = None) -> None:  # noqa: C901 -- own the training process and cleanup.
+        """Train, optionally export the final model, and release resources."""
+        if not torch.cuda.is_available():
+            message = "TorchTitan training requires a CUDA device."
+            raise RuntimeError(message)
 
-    with patch.dict(os.environ, environment):
-        owns_process_group = not dist.is_initialized()
-        trainer = None
-        trained = None
-        try:
-            trainer = Trainer.from_checkpoint(checkpoint, config, trainset, valset, run_dir)
-            if valset is not None:
-                trainer.validator.validate(trainer.model_parts, trainer.step)
-            trainer.train()
-            if valset is not None and trainer.validator.last_step != trainer.step:
-                trainer.validator.validate(trainer.model_parts, trainer.step)
-            if save is not None:
-                trained = trainer.model_parts[0].to_hf(trainer.tokenizer.tokenizer)
-                if trained is not None:
-                    if isinstance(save, Path):
-                        trained.save_pretrained(save.expanduser(), max_shard_size="5GB")
-                    else:
-                        trained.push_to_hub(save, max_shard_size="5GB")
-        finally:
-            if trainer is not None:
-                trainer.close()
-            del trained
-            del trainer
-            if owns_process_group and dist.is_initialized():
-                dist.destroy_process_group()
-            torch.cuda.empty_cache()
+        checkpoint = (
+            Path(self.repo).expanduser().resolve()
+            if Path(self.repo).expanduser().is_dir()
+            else Path(snapshot_download(str(self.repo), revision=self.revision))
+        )
+        environment = {}
+        if "LOCAL_RANK" not in os.environ:
+            # give a direct single-device call the same process settings as torchrun
+            with socket.socket() as server:
+                server.bind(("127.0.0.1", 0))
+                port = str(server.getsockname()[1])
+            environment = {
+                "LOCAL_RANK": "0",
+                "RANK": "0",
+                "WORLD_SIZE": "1",
+                "MASTER_ADDR": "127.0.0.1",
+                "MASTER_PORT": port,
+            }
+
+        with patch.dict(os.environ, environment):
+            owns_process_group = not dist.is_initialized()
+            trainer = None
+            trained = None
+            try:
+                trainer = TitanTrainer.from_checkpoint(
+                    checkpoint, self.config, self.trainset, self.valset, self.run_dir
+                )
+                if final_save_to is None and dist.get_rank() == 0:
+                    logger.warning(
+                        "No final HF export is configured. "
+                        "The final checkpoint will be saved in DCP format under %s.",
+                        trainer.config.dump_folder,
+                    )
+                if self.valset is not None:
+                    trainer.validator.validate(trainer.model_parts, trainer.step)
+                trainer.train()
+                if self.valset is not None and trainer.validator.last_step != trainer.step:
+                    trainer.validator.validate(trainer.model_parts, trainer.step)
+                if final_save_to is not None:
+                    trained = trainer.model_parts[0].to_hf(trainer.tokenizer.tokenizer)
+                    if trained is not None:
+                        if isinstance(final_save_to, Path):
+                            trained.save_pretrained(
+                                final_save_to.expanduser(), max_shard_size="5GB"
+                            )
+                        else:
+                            trained.push_to_hub(final_save_to, max_shard_size="5GB")
+            finally:
+                if trainer is not None:
+                    trainer.close()
+                del trained
+                del trainer
+                if owns_process_group and dist.is_initialized():
+                    dist.destroy_process_group()
+                torch.cuda.empty_cache()
