@@ -36,6 +36,7 @@ def get_named_metrics(metrics: Metrics) -> dict[str, Metric]:
 def validate_eval_setup(rows, queries, metric_names) -> None:  # noqa: C901
     """Reject ambiguous inputs, invalid labels, and unknown metric selections."""
     has_metrics = ["metrics" in row for row in rows]
+    # metric names must appear in every row or no rows
     if any(has_metrics) and not all(has_metrics):
         msg = "Specify metrics in every row or omit them everywhere."
         raise ValueError(msg)
@@ -44,25 +45,30 @@ def validate_eval_setup(rows, queries, metric_names) -> None:  # noqa: C901
         if queries is None:
             options = [row["options"]]
         else:
+            # queries must come from one place only
             if "query" in row or "options" in row:
                 msg = "Supply queries either in data or through queries=, not both."
                 raise ValueError(msg)
             options = [query.options for query in queries]
 
         labels = [row["label"]] if len(options) == 1 else row["label"]
+        # each query needs one label
         if len(labels) != len(options):
             msg = "Provide one label per query, in query order."
             raise ValueError(msg)
         for label, query_options in zip(labels, options, strict=True):
             if isinstance(label, int):
+                # the label must point to an available option
                 if not 0 <= label < len(query_options):
                     msg = "Integer labels must be valid zero-based option indices."
                     raise ValueError(msg)
+            # a list label needs one value for each option
             elif len(label) != len(query_options):
                 msg = "Vector labels need one value per option."
                 raise ValueError(msg)
 
         unknown = set(row.get("metrics", metric_names)) - set(metric_names)
+        # each named metric must have a supplied function
         if unknown:
             msg = f"Unknown metrics: {sorted(unknown)}"
             raise ValueError(msg)
