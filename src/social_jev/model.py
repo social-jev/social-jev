@@ -140,18 +140,18 @@ class SocialJev:
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
 
     def evaluate(
-        self, *, data, query: Query | list[Query] | None = None, metrics: Metrics = accuracy
+        self, *, data, queries: Query | list[Query] | None = None, metrics: Metrics = accuracy
     ) -> EvaluationResult:
         """Score shared or per-row queries with named metrics on selected decisions."""
         named_metrics = get_named_metrics(metrics)
         requests, labels, selected_metrics = create_eval_requests(
-            data, query=query, metric_names=named_metrics
+            data, queries=queries, metric_names=named_metrics
         )
         predictions = [prediction for results in self.query(requests) for prediction in results]
-        queries = [item_query for request in requests for item_query in request.queries]
+        request_queries = [item_query for request in requests for item_query in request.queries]
         probabilities = [
             [prediction.probabilities[option] for option in item_query.options]
-            for prediction, item_query in zip(predictions, queries, strict=True)
+            for prediction, item_query in zip(predictions, request_queries, strict=True)
         ]
         scores = {}
         for name, metric in named_metrics.items():

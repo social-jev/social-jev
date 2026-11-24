@@ -36,7 +36,7 @@ def test_shared_query_reports_named_metrics_and_order():
     model = EvaluationModel()
     query = Query(text="Relevant?", options=["Yes", "No"])
     data = iter([{"state": "0", "label": 0}, {"state": "0", "label": 1}])
-    result = model.evaluate(query=query, data=data, metrics=[accuracy, f1])
+    result = model.evaluate(queries=query, data=data, metrics=[accuracy, f1])
     assert result.scores == {"accuracy": 0.5, "f1": pytest.approx(2 / 3)}
     assert result.labels == [0, 1]
     assert [prediction.choice for prediction in result.predictions] == ["Yes", "Yes"]
@@ -52,7 +52,7 @@ def test_all_shared_queries_apply_to_all_rows_even_when_lengths_match():
         Query(text="Topic?", options=["Budget", "Audits", "Other"]),
     ]
     result = model.evaluate(
-        query=queries,
+        queries=queries,
         data=[{"state": "0", "label": [0, 1]}, {"state": "1", "label": [1, 2]}],
     )
     assert result.scores == {"accuracy": 0.5}
@@ -123,7 +123,7 @@ def test_shared_queries_expand_metric_selections():
     model = EvaluationModel()
     queries = [Query(text=text, options=["Yes", "No"]) for text in ["Budget?", "Audits?"]]
     result = model.evaluate(
-        query=queries,
+        queries=queries,
         data=[
             {"state": "0", "label": [0, 1], "metrics": ["accuracy"]},
             {"state": "1", "label": [1, 1], "metrics": []},
@@ -146,9 +146,9 @@ def test_distributional_labels(mode):
     model = EvaluationModel()
     query = Query(text="Relevant?", options=["Yes", "No"])
     row = {"state": "0", "label": [0.8, 0.2]}
-    kwargs = {"query": query}
+    kwargs = {"queries": query}
     if mode == "multiple":
-        kwargs["query"] = [query, Query(text="Uncivil?", options=["Yes", "No"])]
+        kwargs["queries"] = [query, Query(text="Uncivil?", options=["Yes", "No"])]
         row["label"] = [[0.8, 0.2], [0.4, 0.6]]
     elif mode == "custom":
         kwargs = {}
@@ -194,7 +194,7 @@ def test_distributional_labels(mode):
 def test_invalid_setup_fails_before_inference(rows, query, message):
     model = EvaluationModel()
     with pytest.raises(ValueError, match=message):
-        model.evaluate(data=rows, query=query)
+        model.evaluate(data=rows, queries=query)
     assert model.calls == []
 
 

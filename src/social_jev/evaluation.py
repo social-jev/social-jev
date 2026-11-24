@@ -45,7 +45,7 @@ def validate_eval_setup(rows, queries, metric_names) -> None:  # noqa: C901
             options = [row["options"]]
         else:
             if "query" in row or "options" in row:
-                msg = "Supply queries either in data or through query=, not both."
+                msg = "Supply queries either in data or through queries=, not both."
                 raise ValueError(msg)
             options = [query.options for query in queries]
 
@@ -68,15 +68,13 @@ def validate_eval_setup(rows, queries, metric_names) -> None:  # noqa: C901
             raise ValueError(msg)
 
 
-def create_eval_requests(data, *, query, metric_names):
+def create_eval_requests(data, *, queries, metric_names):
     """Expand shared or per-row queries and align labels and metric selections."""
     rows = list(data)
-    if query is None:
-        queries = None
-    elif isinstance(query, Query):
-        queries = [query]
-    else:
-        queries = list(query)
+    if isinstance(queries, Query):
+        queries = [queries]
+    elif queries is not None:
+        queries = list(queries)
 
     validate_eval_setup(rows, queries, metric_names)
     requests = []
