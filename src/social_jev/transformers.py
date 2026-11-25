@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import torch
-from torch.nn.attention.flex_attention import create_mask
 from transformers import AutoTokenizer, PreTrainedModel, Qwen3Model
 
 from .attention import AttentionMask, Positions
@@ -100,13 +99,7 @@ class SocialJevModel(PreTrainedModel):
         """Return a tensor of scores arranged by query and option."""
         input_ids = batch.input_ids
         if isinstance(batch, PackedBatch):
-            mask = AttentionMask(batch).value
-            if self.backbone.config._attn_implementation != "flex_attention":
-                size, length = input_ids.shape
-                mask = create_mask(
-                    mask.mask_mod, size, 1, length, length, device=str(input_ids.device)
-                )
-            attention_mask = {"full_attention": mask}
+            attention_mask = {"full_attention": AttentionMask(batch).value}
             position_ids = Positions(batch).value
             option_positions = batch.option_positions
             option_indices = batch.option_indices

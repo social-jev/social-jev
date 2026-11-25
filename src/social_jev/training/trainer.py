@@ -145,6 +145,7 @@ class TitanModel(SocialJevModel, Configurable):
 
     def __init__(self, config):
         super().__init__(SocialJevConfig.from_pretrained(config.checkpoint))
+        self.backbone.set_attn_implementation("flex_attention")
         self.backbone.requires_grad_(config.train_backbone)
 
     def verify_module_protocol(self):

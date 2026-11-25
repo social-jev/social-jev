@@ -140,6 +140,7 @@ def test_transformers_loading_kwargs_reach_model(checkpoint, monkeypatch):
         model.stop()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA for FlexAttention")
 def test_packed_transformers_matches_independent_candidates(checkpoint):
     model = SocialJev.from_pretrained(checkpoint)
     items = requests()
@@ -150,6 +151,9 @@ def test_packed_transformers_matches_independent_candidates(checkpoint):
         FormatStep(items), model.processor.tokenizer, seq_len=256, batch_size=1
     ).next()
     assert batch is not None
+    model.engine.model.backbone.set_attn_implementation("flex_attention")
+    model.engine.model.to("cuda")
+    batch = batch.to("cuda")
     with torch.no_grad():
         logits = model.engine.model(batch)
     actual = model.processor.decode(logits[batch.option_mask].tolist(), encoded)
@@ -159,6 +163,7 @@ def test_packed_transformers_matches_independent_candidates(checkpoint):
     model.stop()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA for FlexAttention")
 def test_packed_training_targets_follow_queries(checkpoint):
     model = SocialJev.from_pretrained(checkpoint)
     first, second = requests()
@@ -180,7 +185,11 @@ def test_packed_training_targets_follow_queries(checkpoint):
         assert (row[boundaries[-1] + 1 :] == model.processor.tokenizer.pad_token_id).all()
     assert batch.targets is not None
     assert batch.targets.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
+    model.engine.model.backbone.set_attn_implementation("flex_attention")
+    model.engine.model.to("cuda")
+    batch = batch.to("cuda")
     logits = model.engine.model(batch)
+    assert batch.targets is not None
     assert logits.shape == batch.targets.shape
     assert torch.equal(logits.isneginf(), batch.option_indices < 0)
     log_probs = logits.float().log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
