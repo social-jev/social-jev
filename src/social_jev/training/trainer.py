@@ -36,7 +36,7 @@ from torchtitan.distributed import utils as dist_utils
 from torchtitan.distributed.fsdp import disable_fsdp_gradient_division
 from torchtitan.protocols.model import BaseModel
 from torchtitan.protocols.model_spec import ModelSpec
-from torchtitan.tools.logging import logger
+from torchtitan.tools.logging import init_logger, logger
 from torchtitan.trainer import Trainer as TorchTitanTrainer
 from transformers import AutoTokenizer
 
@@ -585,6 +585,7 @@ class Trainer:
 
     def run(self, *, final_save_to: str | Path | None = None) -> None:  # noqa: C901 -- own the training process and cleanup.
         """Train, optionally export the final model, and release resources."""
+        init_logger()
         if not torch.cuda.is_available():
             message = "TorchTitan training requires a CUDA device."
             raise RuntimeError(message)
