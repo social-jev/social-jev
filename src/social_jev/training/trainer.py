@@ -434,7 +434,10 @@ class Validation(Validator):
         del kwargs
         self.config: Validation.Config = config
         self.last_step: int | None = None
-        del dp_rank, dp_world_size
+        self.dp_rank = dp_rank
+        self.dp_world_size = dp_world_size
+        self.group = parallel_dims.get_mesh("batch").get_group() if dp_world_size > 1 else None
+        self.placeholder = None
         self.parallel_dims = parallel_dims
         self.loss = config.loss_fn
         self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
@@ -446,44 +449,76 @@ class Validation(Validator):
             self.config.interval is not None and step % self.config.interval == 0
         )
 
+    def if_exhausted_fill_placeholder(self, batch):
+        """Keep exhausted ranks participating until every rank finishes."""
+        if self.group is None:
+            return batch
+        available = torch.tensor([batch is not None], dtype=torch.int64, device=self.device)
+        availability = torch.empty(self.dp_world_size, dtype=torch.int64, device=self.device)
+        dist.all_gather_into_tensor(availability, available, group=self.group)
+        active_ranks = availability.nonzero().flatten()
+        if active_ranks.numel() == 0:
+            return None
+        if self.placeholder is None:
+            # share one real cpu batch, including with ranks that have no samples
+            source_rank = int(active_ranks[0].item())
+            shared = [batch if self.dp_rank == source_rank else None]
+            dist.broadcast_object_list(
+                shared,
+                src=dist.get_global_rank(self.group, source_rank),
+                group=self.group,
+            )
+            self.placeholder = shared[0]
+        return self.placeholder if batch is None else batch
+
     @torch.no_grad()
     def validate(self, model_parts, step):
-        """Evaluate the same sequence of validation batches on every rank."""
+        """Evaluate disjoint samples and combine losses across ranks."""
         model = model_parts[0].eval()
+        self.device = model.device
+        self.placeholder = None
         source = self.config.source
         assert source is not None
         batches = packed_batches(
-            SampleStep(source, 0, 1, infinite=False),
+            SampleStep(source, self.dp_rank, self.dp_world_size, infinite=False),
             self.tokenizer,
             seq_len=self.config.seq_len,
             batch_size=self.config.batch_size,
         )
-        total = torch.zeros((), device=model.device)
-        queries = 0
+        totals = torch.zeros(2, dtype=torch.float64, device=self.device)
         observations = []
         try:
-            while (batch := batches.next()) is not None:
-                batch = batch.to(model.device)
+            while True:
+                batch = batches.next()
+                exhausted = batch is None
+                batch = self.if_exhausted_fill_placeholder(batch)
+                if batch is None:
+                    break
+                batch = batch.to(self.device)
                 # the distributed wrapper handles mixed precision; on one gpu, use autocast
                 with torch.autocast(
-                    device_type=model.device.type,
+                    device_type=self.device.type,
                     dtype=torch.bfloat16,
-                    enabled=model.device.type == "cuda" and not self.parallel_dims.dp_enabled,
+                    enabled=self.device.type == "cuda" and not self.parallel_dims.dp_enabled,
                 ):
                     logits = model(batch)
-                logits = logits.float()
+                if exhausted:
+                    continue
                 targets = batch.targets
                 assert targets is not None
-                losses = self.loss(logits, targets, batch.option_mask)
-                total += losses.sum()
-                queries += len(targets)
-                observations.append((losses.to("cpu"), batch.metadata))
-            if queries:
-                mean = float(total.item()) / queries
-                extras = {"eval/loss": mean, **metadata_metrics(observations, "eval", None)}
-                self.metrics_processor.log_validation(mean, step, extras)
+                losses = self.loss(logits.float(), targets, batch.option_mask)
+                totals[0] += losses.double().sum()
+                totals[1] += losses.numel()
+                observations.append((losses.cpu(), batch.metadata))
+            if self.group is not None:
+                dist.all_reduce(totals, group=self.group)
+            categories = metadata_metrics(observations, "eval", self.group)
+            if totals[1].item():
+                mean = (totals[0] / totals[1]).item()
+                self.metrics_processor.log_validation(mean, step, {"eval/loss": mean, **categories})
             self.last_step = step
         finally:
+            self.placeholder = None
             model.train()
 
 

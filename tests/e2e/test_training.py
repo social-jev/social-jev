@@ -1,8 +1,10 @@
 """Exercise training orchestration on CPU when the TorchTitan runtime is installed."""
 
+import json
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -13,7 +15,7 @@ import torch
 from torch.distributed import checkpoint as dcp
 
 from social_jev import SocialJev
-from social_jev.data import Sample, SampleStep, packed_batches
+from social_jev.data import Sample, SampleStep, TokenizedSample, packed_batches
 
 pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
@@ -465,3 +467,73 @@ def test_training_initializes_from_hf_weights(checkpoint, tmp_path, monkeypatch)
         if manager is not None:
             manager.close()
         torch.distributed.destroy_process_group()
+
+
+def run_partitioned_validation(rank, checkpoint, directory, count):
+    """Compare partitioned validation with one-rank validation on identical weights."""
+    torch.set_num_threads(1)
+    torch.distributed.init_process_group(
+        "gloo", init_method=(directory / "rendezvous").as_uri(), rank=rank, world_size=2
+    )
+    try:
+        loaded = SocialJev.from_pretrained(checkpoint)
+        model = loaded.engine.model
+        tokenizer = loaded.processor.tokenizer
+        samples = [replace(next(source()), targets=[index % 2]) for index in range(count)]
+        config = Validation.Config(
+            enable=True,
+            source=partial(iter, samples),
+            loss_fn=CrossEntropy(),
+            interval=None,
+            seq_len=len(TokenizedSample.from_sample(samples[0], tokenizer)),
+            batch_size=1,
+            steps=1,
+        )
+        metrics = Mock()
+        dimensions = SimpleNamespace(
+            dp_enabled=True,
+            get_mesh=lambda _name: SimpleNamespace(get_group=lambda: torch.distributed.group.WORLD),
+        )
+        validator = Validation(
+            config,
+            dp_world_size=1,
+            dp_rank=0,
+            tokenizer=SimpleNamespace(tokenizer=tokenizer),
+            parallel_dims=dimensions,
+            metrics_processor=metrics,
+        )
+        validator.validate([model], 0)
+        expected = metrics.log_validation.call_args.args[2]
+        validator.dp_rank = rank
+        validator.dp_world_size = 2
+        validator.group = torch.distributed.group.WORLD
+        forwards = []
+
+        def synchronize_forward(_model, _inputs, _output):
+            # a collective on every forward catches unmatched placeholder calls
+            marker = torch.ones(1)
+            torch.distributed.all_reduce(marker)
+            forwards.append(marker.item())
+
+        handle = model.register_forward_hook(synchronize_forward)
+        validator.validate([model], 1)
+        handle.remove()
+        actual = metrics.log_validation.call_args.args[2]
+        assert actual == pytest.approx(expected)
+        assert model.training
+        assert validator.placeholder is None
+        (directory / f"rank-{rank}.json").write_text(json.dumps(forwards))
+        loaded.stop()
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_validation_partitions_samples_and_excludes_placeholders(checkpoint, tmp_path, count):
+    torch.multiprocessing.spawn(
+        run_partitioned_validation,
+        args=(checkpoint, tmp_path, count),
+        nprocs=2,
+    )
+    forwards = [json.loads((tmp_path / f"rank-{rank}.json").read_text()) for rank in range(2)]
+    assert forwards == [[2.0] * ((count + 1) // 2)] * 2
