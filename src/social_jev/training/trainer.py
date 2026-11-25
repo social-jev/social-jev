@@ -261,6 +261,7 @@ class TitanTrainer(TorchTitanTrainer):
     def __init__(self, config):
         super().__init__(config)
         self.checkpointer.tokenizer = self.tokenizer.tokenizer
+        self.loss = config.loss_fn
 
     def init_distributed(self):
         """Initialize ranks and resolve their shared output directory."""
@@ -295,9 +296,16 @@ class TitanTrainer(TorchTitanTrainer):
         for inputs, _targets in batches:
             batch = inputs["batch"].to(self.device)
             with self.train_context():
-                logits = model(batch).float()
+                # the distributed wrapper handles mixed precision; on one gpu, use autocast
+                with torch.autocast(
+                    device_type=self.device.type,
+                    dtype=torch.bfloat16,
+                    enabled=self.device.type == "cuda" and not self.parallel_dims.dp_enabled,
+                ):
+                    logits = model(batch)
+                logits = logits.float()
                 assert batch.targets is not None
-                losses = self.config.loss_fn(logits, batch.targets, batch.option_mask)
+                losses = self.loss(logits, batch.targets, batch.option_mask)
                 loss = losses.sum() / count
                 loss.backward()
             if should_log:
@@ -426,7 +434,9 @@ class Validation(Validator):
         del kwargs
         self.config: Validation.Config = config
         self.last_step: int | None = None
-        del dp_rank, dp_world_size, parallel_dims
+        del dp_rank, dp_world_size
+        self.parallel_dims = parallel_dims
+        self.loss = config.loss_fn
         self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
         self.metrics_processor = metrics_processor
 
@@ -454,10 +464,17 @@ class Validation(Validator):
         try:
             while (batch := batches.next()) is not None:
                 batch = batch.to(model.device)
-                logits = model(batch).float()
+                # the distributed wrapper handles mixed precision; on one gpu, use autocast
+                with torch.autocast(
+                    device_type=model.device.type,
+                    dtype=torch.bfloat16,
+                    enabled=model.device.type == "cuda" and not self.parallel_dims.dp_enabled,
+                ):
+                    logits = model(batch)
+                logits = logits.float()
                 targets = batch.targets
                 assert targets is not None
-                losses = self.config.loss_fn(logits, targets, batch.option_mask)
+                losses = self.loss(logits, targets, batch.option_mask)
                 total += losses.sum()
                 queries += len(targets)
                 observations.append((losses.to("cpu"), batch.metadata))

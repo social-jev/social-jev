@@ -42,10 +42,28 @@ def source():
 
 
 @pytest.mark.parametrize("interval", [None, 2])
-def test_validation_schedule_and_custom_loss(checkpoint, interval):
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available() or not torch.cuda.is_bf16_supported(),
+                reason="requires a CUDA GPU with BF16 support",
+            ),
+        ),
+    ],
+)
+def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
     model = SocialJev.from_pretrained(checkpoint)
     wrapped = TitanModel(TitanModel.Config(checkpoint=str(checkpoint), train_backbone=True))
     wrapped.load_state_dict(model.engine.model.state_dict())
+    wrapped.to(device)
+    forward_dtypes = []
+    wrapped.register_forward_hook(
+        lambda _model, _inputs, output: forward_dtypes.append(output.dtype)
+    )
     loss_fn = Mock(wraps=BrierLoss())
     metrics = Mock()
     validator = Validation(
@@ -61,13 +79,16 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval):
         dp_world_size=1,
         dp_rank=0,
         tokenizer=SimpleNamespace(tokenizer=model.processor.tokenizer),
-        parallel_dims=None,
+        parallel_dims=SimpleNamespace(dp_enabled=False),
         metrics_processor=metrics,
     )
     scheduled = [step for step in range(6) if validator.should_validate(step)]
     assert scheduled == ([0, 5] if interval is None else [0, 2, 4, 5])
     validator.validate([wrapped], 0)
     assert loss_fn.call_count == 1
+    assert forward_dtypes == [torch.bfloat16 if device == "cuda" else torch.float32]
+    assert loss_fn.call_args.args[0].dtype == torch.float32
+    assert all(parameter.dtype == torch.float32 for parameter in wrapped.parameters())
     assert wrapped.training
     logged, step, extras = metrics.log_validation.call_args.args
     assert step == 0
@@ -102,7 +123,8 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
     trainer = cast(
         "TitanTrainer",
         SimpleNamespace(
-            config=SimpleNamespace(loss_fn=loss_fn, training=SimpleNamespace(max_norm=100.0)),
+            config=SimpleNamespace(training=SimpleNamespace(max_norm=100.0)),
+            loss=loss_fn,
             model_parts=[model],
             device=torch.device("cpu"),
             gradient_accumulation_steps=len(inputs),
