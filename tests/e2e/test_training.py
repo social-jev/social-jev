@@ -57,7 +57,7 @@ def source():
             {"role": "option", "content": "A"},
             {"role": "option", "content": "B"},
         ],
-        targets=[[0.25, 0.75]],
+        labels=[[0.25, 0.75]],
         metadata={"language": "en"},
     )
 
@@ -135,10 +135,10 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
     )
     batch = batches.next()
     assert batch is not None
-    assert batch.targets is not None
+    assert batch.labels is not None
     repeated = deepcopy(batch)
-    repeated.targets = 1 - batch.targets
-    inputs = [({"batch": item}, item.targets) for item in (batch, repeated, repeated)]
+    repeated.labels = 1 - batch.labels
+    inputs = [({"batch": item}, item.labels) for item in (batch, repeated, repeated)]
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     expected_optimizer = torch.optim.SGD(reference.parameters(), lr=0.01)
     # exercise the actual update without initializing CUDA or distributed startup
@@ -166,7 +166,7 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
 
     expected = torch.cat(
         [
-            loss_fn(reference(item), item.targets, item.option_indices >= 0)
+            loss_fn(reference(item), item.labels, item.option_indices >= 0)
             for item in (batch, repeated, repeated)
         ]
     ).mean()
@@ -492,7 +492,7 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         loaded = SocialJev.from_pretrained(checkpoint)
         model = ScoringModel()
         tokenizer = loaded.processor.tokenizer
-        samples = [replace(next(source()), targets=[index % 2]) for index in range(count)]
+        samples = [replace(next(source()), labels=[index % 2]) for index in range(count)]
         config = Validation.Config(
             enable=True,
             source=partial(iter, samples),

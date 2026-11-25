@@ -14,15 +14,12 @@ from typing import TYPE_CHECKING, Literal, cast
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from .types import OptionLabels, Request, Result
+from .types import OptionLabels, QueryLabel, Request, Result
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
     from transformers import PreTrainedTokenizerBase
-
-
-type Target = int | list[float]
 
 
 @dataclass
@@ -32,14 +29,14 @@ class Sample:
     messages: list[dict[str, str]]
     """Document, questions, and options in their original order."""
 
-    targets: list[Target] | None = None
-    """One reference target per query."""
+    labels: list[QueryLabel] | None = None
+    """One reference label per query."""
     metadata: dict[str, str] = field(default_factory=dict)
     """Caller-supplied categories for reporting."""
 
     def __post_init__(self):  # noqa: C901 -- keep the label contract together.
         """Check that supplied labels match the query options."""
-        if self.targets is None:
+        if self.labels is None:
             return
         counts = []
         for entry in self.messages:
@@ -47,18 +44,18 @@ class Sample:
                 counts.append(0)
             elif entry["role"] == "option":
                 counts[-1] += 1
-        if len(self.targets) != len(counts):
-            message = "Supply one target per query."
+        if len(self.labels) != len(counts):
+            message = "Supply one label per query."
             raise ValueError(message)
-        for target, count in zip(self.targets, counts, strict=True):
-            if isinstance(target, int):
-                if not 0 <= target < count:
-                    message = "Target index is outside the query's options."
+        for label, count in zip(self.labels, counts, strict=True):
+            if isinstance(label, int):
+                if not 0 <= label < count:
+                    message = "Label index is outside the query's options."
                     raise ValueError(message)
             elif (
-                len(target) != count
-                or any(value < 0 for value in target)
-                or not isclose(sum(target), 1.0, abs_tol=1e-6)
+                len(label) != count
+                or any(value < 0 for value in label)
+                or not isclose(sum(label), 1.0, abs_tol=1e-6)
             ):
                 message = "Supply one nonnegative probability per option summing to one."
                 raise ValueError(message)
@@ -84,8 +81,8 @@ class TokenizedSample:
     roles: list[str]
     """Message roles aligned with their token boundaries."""
 
-    targets: list[Target] | None = None
-    """Targets aligned with the query messages."""
+    labels: list[QueryLabel] | None = None
+    """Labels aligned with the query messages."""
     metadata: list[dict[str, str]] = field(default_factory=list)
     """Reporting categories for each query."""
 
@@ -110,7 +107,7 @@ class TokenizedSample:
             ids,
             boundaries,
             roles,
-            sample.targets,
+            sample.labels,
             [sample.metadata] * roles.count("query"),
         )
 
@@ -129,22 +126,22 @@ class TokenizedSample:
             ids=self.ids[token_start:token_stop],
             message_boundaries=[end - token_start for end in self.message_boundaries[start:stop]],
             roles=self.roles[start:stop],
-            targets=None if self.targets is None else self.targets[queries],
+            labels=None if self.labels is None else self.labels[queries],
             metadata=self.metadata[queries],
         )
 
     def __add__(self, other: TokenizedSample) -> TokenizedSample:
         """Concatenate messages and adjust boundaries by the existing token length."""
-        targets = None
-        if self.targets is not None:
-            assert other.targets is not None
-            targets = self.targets + other.targets
+        labels = None
+        if self.labels is not None:
+            assert other.labels is not None
+            labels = self.labels + other.labels
         return TokenizedSample(
             ids=self.ids + other.ids,
             message_boundaries=self.message_boundaries
             + [end + len(self) for end in other.message_boundaries],
             roles=self.roles + other.roles,
-            targets=targets,
+            labels=labels,
             metadata=self.metadata + other.metadata,
         )
 
@@ -239,7 +236,7 @@ class Encoded:
 
 @dataclass
 class PackedBatch:
-    """Tokens, message boundaries, and optional query targets."""
+    """Tokens, message boundaries, and optional query labels."""
 
     input_ids: torch.Tensor
     message_boundaries: list[list[int]]
@@ -247,7 +244,7 @@ class PackedBatch:
     metadata: list[dict[str, str]]
     option_indices: torch.Tensor
     option_positions: torch.Tensor
-    targets: OptionLabels | None
+    labels: OptionLabels | None
 
     @classmethod
     def from_samples(cls, samples: list[TokenizedSample]) -> PackedBatch:  # noqa: C901 -- collate aligned options and labels together.
@@ -262,21 +259,21 @@ class PackedBatch:
                     groups[-1].append(len(positions))
                     positions.append((row, end))
 
-        targets = None
-        if samples[0].targets is not None:
-            labels = []
+        labels = None
+        if samples[0].labels is not None:
+            query_labels = []
             for sample in samples:
-                assert sample.targets is not None
-                labels.extend(sample.targets)
+                assert sample.labels is not None
+                query_labels.extend(sample.labels)
             distributions = []
-            for label, options in zip(labels, groups, strict=True):
+            for label, options in zip(query_labels, groups, strict=True):
                 if isinstance(label, int):
                     distribution = torch.zeros(len(options))
                     distribution[label] = 1.0
                 else:
                     distribution = torch.tensor(label, dtype=torch.float32)
                 distributions.append(distribution)
-            targets = pad_sequence(distributions, batch_first=True)
+            labels = pad_sequence(distributions, batch_first=True)
 
         return cls(
             input_ids=torch.tensor([sample.ids for sample in samples]),
@@ -289,7 +286,7 @@ class PackedBatch:
                 padding_value=-1,
             ),
             option_positions=torch.tensor(positions),
-            targets=targets,
+            labels=labels,
         )
 
     @property
@@ -304,7 +301,7 @@ class PackedBatch:
             input_ids=self.input_ids.to(device),
             option_indices=self.option_indices.to(device),
             option_positions=self.option_positions.to(device),
-            targets=None if self.targets is None else self.targets.to(device),
+            labels=None if self.labels is None else self.labels.to(device),
         )
 
 

@@ -129,7 +129,7 @@ class TitanLoader(BaseDataLoader):
             while (batch := pending.result()) is not None:
                 pending = executor.submit(batches.next)
                 self.consumed += 1
-                yield {"input": batch.input_ids, "batch": batch}, batch.targets
+                yield {"input": batch.input_ids, "batch": batch}, batch.labels
 
     def state_dict(self):
         """Save the number of batches consumed by the trainer."""
@@ -302,7 +302,7 @@ class TitanTrainer(TorchTitanTrainer):
         )
         batches = [next(data_iterator) for _ in range(self.gradient_accumulation_steps)]
 
-        count = torch.tensor(sum(len(targets) for _, targets in batches), device=self.device)
+        count = torch.tensor(sum(len(labels) for _, labels in batches), device=self.device)
         if group is not None:
             dist.all_reduce(count, group=group)
         self.optimizers.zero_grad(set_to_none=True)
@@ -319,8 +319,8 @@ class TitanTrainer(TorchTitanTrainer):
                 ):
                     logits = model(batch)
                 logits = logits.float()
-                assert batch.targets is not None
-                losses = self.loss(logits, batch.targets, batch.option_mask)
+                assert batch.labels is not None
+                losses = self.loss(logits, batch.labels, batch.option_mask)
                 loss = losses.sum() / count
                 loss.backward()
             if should_log:
@@ -524,9 +524,9 @@ class Validation(Validator):
                     logits = model(batch)
                 if exhausted:
                     continue
-                targets = batch.targets
-                assert targets is not None
-                losses = self.loss(logits.float(), targets, batch.option_mask)
+                labels = batch.labels
+                assert labels is not None
+                losses = self.loss(logits.float(), labels, batch.option_mask)
                 totals[0] += losses.double().sum()
                 totals[1] += losses.numel()
                 observations.append((losses.cpu(), batch.metadata))

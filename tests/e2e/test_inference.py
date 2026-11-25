@@ -183,17 +183,17 @@ def test_packed_training_targets_follow_queries(checkpoint):
     assert batch.input_ids.shape[1] == 128
     for row, boundaries in zip(batch.input_ids, batch.message_boundaries, strict=True):
         assert (row[boundaries[-1] + 1 :] == model.processor.tokenizer.pad_token_id).all()
-    assert batch.targets is not None
-    assert batch.targets.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
+    assert batch.labels is not None
+    assert batch.labels.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
     model.engine.model.backbone.set_attn_implementation("flex_attention")
     model.engine.model.to("cuda")
     batch = batch.to("cuda")
     logits = model.engine.model(batch)
-    assert batch.targets is not None
-    assert logits.shape == batch.targets.shape
+    assert batch.labels is not None
+    assert logits.shape == batch.labels.shape
     assert torch.equal(logits.isneginf(), batch.option_indices < 0)
     log_probs = logits.float().log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
-    loss = -(batch.targets * log_probs).sum() / len(batch.targets)
+    loss = -(batch.labels * log_probs).sum() / len(batch.labels)
     loss.backward()
     assert model.engine.model.decision_head.network[-1].weight.grad.isfinite().all()
     model.stop()

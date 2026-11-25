@@ -113,6 +113,10 @@ class EvaluationResult:
 type OptionLogits = torch.Tensor
 """Model scores before softmax, shaped [queries, options]."""
 
+type QueryLabel = int | list[float]
+"""One query's label: an option index or probabilities over its options."""
+
+
 type OptionLabels = torch.Tensor
 """Reference probabilities in option order, shaped [queries, options]."""
 

@@ -37,11 +37,11 @@ def sample(index):
             {"role": "option", "content": "A"},
             {"role": "option", "content": "B"},
         ],
-        targets=[index % 2],
+        labels=[index % 2],
     )
 
 
-def tokenized(lengths, roles, targets=None):
+def tokenized(lengths, roles, labels=None):
     boundaries = []
     for length in lengths:
         boundaries.append((boundaries[-1] + 1 if boundaries else 0) + length - 1)
@@ -50,7 +50,7 @@ def tokenized(lengths, roles, targets=None):
         ids=list(range(sum(lengths))),
         message_boundaries=boundaries,
         roles=roles,
-        targets=targets,
+        labels=labels,
         metadata=[{"task": str(index)} for index in range(count)],
     )
 
@@ -96,7 +96,7 @@ def test_query_split_preserves_tokens_labels_and_metadata():
     split = SplitStep(Source([original]), split_on="query", seq_len=5)
     rows = list(iter(split.next, None))
     assert [row.ids for row in rows] == [[0, 1, 2, 3, 4], [0, 1, 5, 6, 7]]
-    assert [row.targets for row in rows] == [[0], [[0.25, 0.75]]]
+    assert [row.labels for row in rows] == [[0], [[0.25, 0.75]]]
     assert [row.metadata for row in rows] == [[{"task": "0"}], [{"task": "1"}]]
     assert all(row.message_boundaries == [1, 2, 3, 4] for row in rows)
 
@@ -163,7 +163,7 @@ def test_collation_aligns_labels_and_positions_including_partial_batch():
     batch = batches.next()
     assert batch is not None
     assert batch.input_ids.shape == (2, 6)
-    torch.testing.assert_close(batch.targets, torch.tensor([[0.2, 0.3, 0.5], [0, 1, 0]]))
+    torch.testing.assert_close(batch.labels, torch.tensor([[0.2, 0.3, 0.5], [0, 1, 0]]))
     assert batch.option_indices.tolist() == [[0, 1, 2], [3, 4, -1]]
     assert Positions(batch).value.tolist() == [[0, 1, 2, 3, 3, 3], [0, 1, 2, 3, 3, 0]]
     assert torch.equal(batch.input_ids[1, -1], torch.tensor(99))
