@@ -240,6 +240,8 @@ def test_training_configures_replication_and_checkpoints(tmp_path, monkeypatch, 
     )
     assert config.parallelism.data_parallel_replicate_degree == replicas
     assert config.parallelism.data_parallel_shard_degree == shards
+    assert config.metrics.log_freq == 1
+    assert config.validator.val_steps == 10
     assert config.checkpoint.enable
     assert config.checkpoint.interval == 25
     assert not config.checkpoint.last_save_model_only

@@ -21,7 +21,10 @@ class TrainConfig:
     reduce_dtype: torch.dtype = torch.float32
     head_lr: float = 1e-3
     backbone_lr: float | None = None
-    val_steps: int | None = None
+    log_steps: int = 1
+    """Log training metrics every this many optimizer updates."""
+    val_steps: int | None = 10
+    """Validate every this many updates, plus before and after training."""
     checkpoint_steps: int | None = None
     shuffle_buffer_size: int = 256
     loss_fn: Loss = field(default_factory=FocalLoss)
@@ -36,6 +39,7 @@ class TrainConfig:
             "local_batch_size",
             "data_parallel_shard_degree",
             "shuffle_buffer_size",
+            "log_steps",
             "val_steps",
             "checkpoint_steps",
         ):

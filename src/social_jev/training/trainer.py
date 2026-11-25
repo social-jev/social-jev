@@ -27,6 +27,7 @@ from torch.distributed.fsdp import DataParallelMeshDims, MixedPrecisionPolicy, f
 from torchtitan.components.checkpoint import CheckpointManager
 from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
+from torchtitan.components.metrics import MetricsProcessor
 from torchtitan.components.optimizer import LRSchedulersContainer, OptimizersContainer
 from torchtitan.components.optimizer.optimizer import ParamGroupConfig
 from torchtitan.components.tokenizer import BaseTokenizer
@@ -409,6 +410,7 @@ class TitanTrainer(TorchTitanTrainer):
                 data_parallel_shard_degree=config.data_parallel_shard_degree,
                 spmd_backend="partial_dtensor",
             ),
+            metrics=MetricsProcessor.Config(log_freq=config.log_steps),
             optimizer=OptimizersContainer.Config(param_groups=groups),
             lr_scheduler=ScheduleConfig(
                 lr_schedule=config.lr_schedule,
