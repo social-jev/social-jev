@@ -159,7 +159,7 @@ def test_collation_aligns_labels_and_positions_including_partial_batch():
         ),
     ]
     packed = PackAndPadStep(Source(samples), 6, 99)
-    batches = CollateStep(packed, 3)
+    batches = CollateStep(packed, local_batch_size=3)
     batch = batches.next()
     assert batch is not None
     assert batch.input_ids.shape == (2, 6)
@@ -173,7 +173,7 @@ def test_collation_aligns_labels_and_positions_including_partial_batch():
 def test_packed_attention_preserves_examples_and_isolates_options_and_samples():
     roles = ["state", "query", "example", "example", "option", "option", "state", "query", "option"]
     source = Source([tokenized([1] * len(roles), roles)])
-    batch = CollateStep(PackAndPadStep(source, 10, 99), 1).next()
+    batch = CollateStep(PackAndPadStep(source, 10, 99), local_batch_size=1).next()
     assert batch is not None
     mask = create_mask(AttentionMask(batch).value.mask_mod, 1, 1, 10, 10, device="cpu")
     visible = [

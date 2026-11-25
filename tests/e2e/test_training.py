@@ -90,16 +90,16 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
     )
     loss_fn = Mock(wraps=BrierLoss())
     metrics = Mock()
-    validator = Validation(
-        Validation.Config(
-            enable=True,
-            source=source,
-            loss_fn=loss_fn,
-            interval=interval,
-            seq_len=64,
-            batch_size=2,
-            steps=5,
-        ),
+    validator = Validation.Config(
+        enable=True,
+        source=source,
+        loss_function=loss_fn,
+        val_steps=interval,
+        total_steps=5,
+    ).build(
+        seq_len=64,
+        local_batch_size=2,
+        loss_fn=torch.nn.CrossEntropyLoss(),
         dp_world_size=1,
         dp_rank=0,
         tokenizer=SimpleNamespace(tokenizer=model.processor.tokenizer),
@@ -131,7 +131,7 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
         SampleStep(source, 0, 1, infinite=False),
         loaded.processor.tokenizer,
         seq_len=64,
-        batch_size=1,
+        local_batch_size=1,
     )
     batch = batches.next()
     assert batch is not None
@@ -496,19 +496,19 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         config = Validation.Config(
             enable=True,
             source=partial(iter, samples),
-            loss_fn=CrossEntropy(),
-            interval=None,
-            seq_len=len(TokenizedSample.from_sample(samples[0], tokenizer)),
-            batch_size=1,
-            steps=1,
+            loss_function=CrossEntropy(),
+            val_steps=None,
+            total_steps=1,
         )
         metrics = Mock()
         dimensions = SimpleNamespace(
             dp_enabled=True,
             get_mesh=lambda _name: SimpleNamespace(get_group=lambda: torch.distributed.group.WORLD),
         )
-        validator = Validation(
-            config,
+        validator = config.build(
+            seq_len=len(TokenizedSample.from_sample(samples[0], tokenizer)),
+            local_batch_size=1,
+            loss_fn=torch.nn.CrossEntropyLoss(),
             dp_world_size=1,
             dp_rank=0,
             tokenizer=SimpleNamespace(tokenizer=tokenizer),

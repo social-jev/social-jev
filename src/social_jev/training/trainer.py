@@ -107,7 +107,7 @@ class TitanLoader(BaseDataLoader):
         self.world_size = dp_world_size
         self.tokenizer = tokenizer.tokenizer
         self.seq_len = seq_len
-        self.batch_size = local_batch_size
+        self.local_batch_size = local_batch_size
         self.consumed = 0
 
     def __iter__(self):
@@ -120,7 +120,7 @@ class TitanLoader(BaseDataLoader):
             ),
             self.tokenizer,
             seq_len=self.seq_len,
-            batch_size=self.batch_size,
+            local_batch_size=self.local_batch_size,
         )
         for _ in range(self.consumed):
             batches.next()
@@ -419,11 +419,9 @@ class TitanTrainer(TorchTitanTrainer):
             validator=Validation.Config(
                 enable=valset is not None,
                 source=valset,
-                loss_fn=config.loss_fn,
-                interval=config.val_steps,
-                seq_len=config.seq_len,
-                batch_size=config.local_batch_size,
-                steps=config.steps,
+                loss_function=config.loss_fn,
+                val_steps=config.val_steps,
+                total_steps=config.steps,
             ),
         ).build()
 
@@ -434,11 +432,9 @@ class Validation(Validator):
     @dataclass(kw_only=True, slots=True)
     class Config(Validator.Config):
         source: Callable[[], Iterable[Sample]] | None
-        loss_fn: Loss
-        interval: int | None
-        seq_len: int
-        batch_size: int
-        steps: int
+        loss_function: Loss
+        val_steps: int | None
+        total_steps: int
 
     def __init__(  # noqa: PLR0913 -- torch titan validator interface.
         self,
@@ -449,6 +445,8 @@ class Validation(Validator):
         tokenizer,
         parallel_dims,
         metrics_processor,
+        seq_len,
+        local_batch_size,
         **kwargs,
     ):
         del kwargs
@@ -459,14 +457,16 @@ class Validation(Validator):
         self.group = parallel_dims.get_mesh("batch").get_group() if dp_world_size > 1 else None
         self.placeholder = None
         self.parallel_dims = parallel_dims
-        self.loss = config.loss_fn
+        self.loss = config.loss_function
+        self.seq_len = seq_len
+        self.local_batch_size = local_batch_size
         self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
         self.metrics_processor = metrics_processor
 
     def should_validate(self, step):
         """Validate at step zero, the requested intervals, and the final update."""
-        return step in (0, self.config.steps) or (
-            self.config.interval is not None and step % self.config.interval == 0
+        return step in (0, self.config.total_steps) or (
+            self.config.val_steps is not None and step % self.config.val_steps == 0
         )
 
     def if_exhausted_fill_placeholder(self, batch):
@@ -502,8 +502,8 @@ class Validation(Validator):
         batches = packed_batches(
             SampleStep(source, self.dp_rank, self.dp_world_size, infinite=False),
             self.tokenizer,
-            seq_len=self.config.seq_len,
-            batch_size=self.config.batch_size,
+            seq_len=self.seq_len,
+            local_batch_size=self.local_batch_size,
         )
         totals = torch.zeros(2, dtype=torch.float64, device=self.device)
         observations = []

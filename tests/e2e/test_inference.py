@@ -148,7 +148,7 @@ def test_packed_transformers_matches_independent_candidates(checkpoint):
     expected = model.processor.decode(model.engine.process(encoded.inputs), encoded)
 
     batch = packed_batches(
-        FormatStep(items), model.processor.tokenizer, seq_len=256, batch_size=1
+        FormatStep(items), model.processor.tokenizer, seq_len=256, local_batch_size=1
     ).next()
     assert batch is not None
     model.engine.model.backbone.set_attn_implementation("flex_attention")
@@ -176,7 +176,7 @@ def test_packed_training_targets_follow_queries(checkpoint):
         SampleStep(source, 0, 1, infinite=False, shuffle_buffer_size=1),
         model.processor.tokenizer,
         seq_len=128,
-        batch_size=2,
+        local_batch_size=2,
     )
     batch = batches.next()
     assert batch is not None

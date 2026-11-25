@@ -487,13 +487,13 @@ class PackAndPadStep(Step[TokenizedSample]):
 class CollateStep(Step[PackedBatch]):
     """Stack packed rows into a CPU batch, retaining a finite source's final rows."""
 
-    def __init__(self, parent: Step[TokenizedSample], batch_size: int):
+    def __init__(self, parent: Step[TokenizedSample], local_batch_size: int):
         self.parent = parent
-        self.batch_size = batch_size
+        self.local_batch_size = local_batch_size
 
     def next(self) -> PackedBatch | None:
         samples = []
-        for _ in range(self.batch_size):
+        for _ in range(self.local_batch_size):
             sample = self.parent.next()
             if sample is None:
                 break
@@ -506,14 +506,14 @@ def packed_batches(
     tokenizer: PreTrainedTokenizerBase,
     *,
     seq_len: int,
-    batch_size: int,
+    local_batch_size: int,
     pad: bool = True,
 ) -> CollateStep:
     """Build packed batches for training and validation."""
     tokens = TokenizeStep(parent, tokenizer)
     split = SplitStep(tokens, split_on="query", seq_len=seq_len)
     packed = PackAndPadStep(split, seq_len, tokenizer.pad_token_id, pad=pad)
-    return CollateStep(packed, batch_size)
+    return CollateStep(packed, local_batch_size)
 
 
 class Processor:
