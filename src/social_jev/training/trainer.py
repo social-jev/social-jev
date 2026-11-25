@@ -636,7 +636,7 @@ class Trainer:
                                 final_save_to.expanduser(), max_shard_size="5GB"
                             )
                         else:
-                            trained.push_to_hub(final_save_to, max_shard_size="5GB")
+                            trained.push_to_hub(final_save_to, private=True, max_shard_size="5GB")
             finally:
                 if trainer is not None:
                     trainer.close()

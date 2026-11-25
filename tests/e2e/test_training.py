@@ -327,7 +327,7 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
         exported.save_pretrained.assert_called_once_with(save, max_shard_size="5GB")
         exported.push_to_hub.assert_not_called()
     elif destination in {"hub", "failure"}:
-        exported.push_to_hub.assert_called_once_with(save, max_shard_size="5GB")
+        exported.push_to_hub.assert_called_once_with(save, private=True, max_shard_size="5GB")
         exported.save_pretrained.assert_not_called()
     else:
         exported.save_pretrained.assert_not_called()
