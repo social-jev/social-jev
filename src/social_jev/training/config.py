@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import torch
 
 from .loss import FocalLoss, Loss
+from .lr_schedule import LRSchedule, WarmupStableDecay
 
 
 @dataclass(kw_only=True, frozen=True)
@@ -24,6 +25,8 @@ class TrainConfig:
     checkpoint_steps: int | None = None
     shuffle_buffer_size: int = 256
     loss_fn: Loss = field(default_factory=FocalLoss)
+    lr_schedule: LRSchedule = field(default_factory=WarmupStableDecay)
+    """Multiply each parameter group's learning rate for the current update."""
 
     def __post_init__(self):
         """Require positive sizes and intervals used by our pipeline."""

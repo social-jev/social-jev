@@ -7,7 +7,7 @@ import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -27,7 +27,7 @@ from torch.distributed.fsdp import DataParallelMeshDims, MixedPrecisionPolicy, f
 from torchtitan.components.checkpoint import CheckpointManager
 from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
-from torchtitan.components.optimizer import OptimizersContainer
+from torchtitan.components.optimizer import LRSchedulersContainer, OptimizersContainer
 from torchtitan.components.optimizer.optimizer import ParamGroupConfig
 from torchtitan.components.tokenizer import BaseTokenizer
 from torchtitan.components.validate import Validator
@@ -44,6 +44,7 @@ from ..config import SocialJevConfig
 from ..data import SampleStep, packed_batches
 from ..transformers import SocialJevModel, is_dcp_checkpoint
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
+from .lr_schedule import LRSchedule, WarmupStableDecay
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -52,6 +53,19 @@ if TYPE_CHECKING:
 
     from ..data import Sample
     from .config import TrainConfig
+
+
+@dataclass(kw_only=True, slots=True)
+class ScheduleConfig(LRSchedulersContainer.Config):
+    """Build TorchTitan schedulers from the caller's learning-rate function."""
+
+    lr_schedule: LRSchedule = field(default_factory=WarmupStableDecay)
+
+    def build(self, *, optimizers, training_steps):
+        def multiplier(current_step):
+            return self.lr_schedule(current_step, training_steps)
+
+        return LRSchedulersContainer(optimizers, multiplier)
 
 
 class TitanTokenizer(Configurable):
@@ -396,6 +410,11 @@ class TitanTrainer(TorchTitanTrainer):
                 spmd_backend="partial_dtensor",
             ),
             optimizer=OptimizersContainer.Config(param_groups=groups),
+            lr_scheduler=ScheduleConfig(
+                lr_schedule=config.lr_schedule,
+                # torchtitan includes this value in its startup log
+                warmup_steps=getattr(config.lr_schedule, "warmup_steps", 0),
+            ),
             loss=CrossEntropyLoss.Config(),
             validator=Validation.Config(
                 enable=valset is not None,
