@@ -27,6 +27,23 @@ class ParityModel(SocialJev):
         return self.query(requests)
 
 
+def test_custom_reflection_model_explains_missing_dependency(monkeypatch):
+    """Reject an unavailable custom reflector before optimization starts."""
+    async_gepa = pytest.importorskip("async_gepa")
+    from social_jev import optim  # noqa: PLC0415 -- optional optimization dependency.
+
+    monkeypatch.setattr(optim, "find_spec", lambda _name: None)
+    monkeypatch.setattr(async_gepa, "optimize", lambda **_kwargs: pytest.fail("Started optimizer"))
+    model = ParityModel(processor=None, engine=None)
+
+    with pytest.raises(ImportError, match=r"custom reflection model.*uv pip install litellm"):
+        model.optimize(
+            query=Query(text="Relevant?", options=["Yes", "No"]),
+            trainset=[{"state": "0", "label": 0}],
+            reflection_lm="openai/example",
+        )
+
+
 def test_evaluation_accuracy_counts_exact_matches():
     """Average correct and incorrect predictions with the default metric."""
     model = ParityModel(processor=None, engine=None)

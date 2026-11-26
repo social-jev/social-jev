@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from importlib.util import find_spec
 from typing import TYPE_CHECKING
 
 from async_gepa import EvaluationBatch
@@ -118,6 +119,12 @@ def get_proposer_kwargs(kwargs):
         )
         if name in kwargs
     }
+    if isinstance(proposer_kwargs.get("reflection_lm"), str) and find_spec("litellm") is None:
+        message = (
+            "A custom reflection model specified by name uses AsyncGEPA's LiteLLM backend. "
+            "Install it with: uv pip install litellm"
+        )
+        raise ImportError(message)
     if proposer_kwargs.get("custom_candidate_proposer") is not None:
         return proposer_kwargs
 
