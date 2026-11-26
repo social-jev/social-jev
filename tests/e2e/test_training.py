@@ -78,7 +78,8 @@ def source():
         ),
     ],
 )
-def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_validation_schedule_and_custom_loss(checkpoint, interval, device, dtype):
     model = SocialJev.from_pretrained(checkpoint)
     if device == "cuda":
         wrapped = TitanModel(TitanModel.Config(checkpoint=str(checkpoint), train_backbone=True))
@@ -98,6 +99,7 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
         loss_function=loss_fn,
         val_steps=interval,
         total_steps=5,
+        compute_dtype=dtype,
     ).build(
         seq_len=64,
         local_batch_size=2,
@@ -112,7 +114,7 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
     assert scheduled == ([0, 5] if interval is None else [0, 2, 4, 5])
     validator.validate([wrapped], 0)
     assert loss_fn.call_count == 1
-    assert forward_dtypes == [torch.bfloat16 if device == "cuda" else torch.float32]
+    assert forward_dtypes == [dtype if device == "cuda" else torch.float32]
     assert loss_fn.call_args.args[0].dtype == torch.float32
     assert all(parameter.dtype == torch.float32 for parameter in wrapped.parameters())
     assert wrapped.training
@@ -152,6 +154,7 @@ def test_accumulated_update_matches_mean_query_loss(checkpoint, loss_fn):
             loss=loss_fn,
             model_parts=[model],
             device=torch.device("cpu"),
+            compute_dtype=torch.bfloat16,
             gradient_accumulation_steps=len(inputs),
             parallel_dims=SimpleNamespace(dp_enabled=False),
             optimizers=optimizer,
@@ -254,7 +257,10 @@ def test_training_configures_replication_and_checkpoints(tmp_path, monkeypatch, 
     assert config.checkpoint.enable
     assert config.checkpoint.interval == 25
     assert not config.checkpoint.last_save_model_only
-    assert config.model_spec.parallelize_fn.keywords["reduce_dtype"] == torch.float32
+    assert config.training.dtype == "float32"
+    assert config.training.mixed_precision_param == "bfloat16"
+    assert config.training.mixed_precision_reduce == "float32"
+    assert config.model_spec.parallelize_fn.keywords["compute_dtype"] == torch.bfloat16
 
 
 def test_default_run_directory_keeps_checkpointing_enabled(monkeypatch):
@@ -281,12 +287,15 @@ def test_training_export_roundtrip_preserves_weights_and_tokenizer(
     exported = model.to_hf(loaded.processor.tokenizer)
     assert exported is not None
     assert not exported.training
+    assert all(parameter.dtype == torch.bfloat16 for parameter in exported.parameters())
     assert all(parameter.device.type == "cpu" for parameter in exported.parameters())
     destination = tmp_path / "export"
     exported.save_pretrained(destination, max_shard_size="5GB")
-    restored = SocialJev.from_pretrained(destination)
+    restored = SocialJev.from_pretrained(destination, dtype="auto")
     for name, parameter in model.state_dict().items():
-        torch.testing.assert_close(restored.engine.model.state_dict()[name], parameter)
+        torch.testing.assert_close(
+            restored.engine.model.state_dict()[name], parameter.to(torch.bfloat16)
+        )
     assert restored.processor.tokenizer.chat_template == loaded.processor.tokenizer.chat_template
     assert restored.processor.tokenizer.get_vocab() == loaded.processor.tokenizer.get_vocab()
     assert model.backbone.config._attn_implementation == "flex_attention"

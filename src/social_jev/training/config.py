@@ -1,8 +1,7 @@
 """Settings for post-training a SocialJev checkpoint."""
 
 from dataclasses import dataclass, field
-
-import torch
+from typing import Literal
 
 from .loss import FocalLoss, Loss
 from .lr_schedule import LRSchedule, WarmupStableDecay
@@ -18,7 +17,8 @@ class TrainConfig:
     global_batch_size: int = -1
     data_parallel_replicate_degree: int | None = None
     data_parallel_shard_degree: int = 1
-    reduce_dtype: torch.dtype = torch.float32
+    dtype: Literal["bfloat16", "float32"] = "bfloat16"
+    """Precision for model computation during training and validation."""
     head_lr: float = 1e-3
     backbone_lr: float | None = None
     weight_decay: float = 0.1

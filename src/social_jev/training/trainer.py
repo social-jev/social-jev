@@ -180,6 +180,11 @@ class TitanModel(SocialJevModel, Configurable):
         )
         if dist.get_rank() != 0:
             return None
+        # export bf16 weights while retaining fp32 training and optimizer state
+        for name, tensor in weights.items():
+            tensor = cast("torch.Tensor", tensor)
+            if tensor.is_floating_point():
+                weights[name] = tensor.to(dtype=torch.bfloat16)
         # attach collected tensors without allocating another set of weights
         with torch.device("meta"):
             model = SocialJevModel(deepcopy(self.config))
@@ -192,12 +197,12 @@ class TitanModel(SocialJevModel, Configurable):
         return model.eval()
 
 
-def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
+def parallelize(model, *, parallel_dims, compute_dtype, **kwargs):
     """Apply replication or sharding to the Transformers layers."""
     del kwargs
     if not parallel_dims.dp_enabled:
         return model
-    policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=reduce_dtype)
+    policy = MixedPrecisionPolicy(param_dtype=compute_dtype, reduce_dtype=torch.float32)
     dims = ["dp_replicate", "fsdp"] if parallel_dims.dp_replicate_enabled else ["fsdp"]
     mesh = parallel_dims.get_mesh(dims)
     if parallel_dims.dp_shard > 1:
@@ -271,6 +276,7 @@ class TitanTrainer(TorchTitanTrainer):
         super().__init__(config)
         self.checkpointer.tokenizer = self.tokenizer.tokenizer
         self.loss = config.loss_fn
+        self.compute_dtype = getattr(torch, config.training.mixed_precision_param)
         if dist.get_rank() == 0:
             self.metrics_processor.logger = Logger(
                 directory=Path(self.config.dump_folder),
@@ -313,8 +319,12 @@ class TitanTrainer(TorchTitanTrainer):
                 # the distributed wrapper handles mixed precision; on one gpu, use autocast
                 with torch.autocast(
                     device_type=self.device.type,
-                    dtype=torch.bfloat16,
-                    enabled=self.device.type == "cuda" and not self.parallel_dims.dp_enabled,
+                    dtype=self.compute_dtype,
+                    enabled=(
+                        self.device.type == "cuda"
+                        and not self.parallel_dims.dp_enabled
+                        and self.compute_dtype != torch.float32
+                    ),
                 ):
                     logits = model(batch)
                 logits = logits.float()
@@ -378,7 +388,7 @@ class TitanTrainer(TorchTitanTrainer):
                     checkpoint=str(checkpoint),
                     train_backbone=config.backbone_lr is not None,
                 ),
-                parallelize_fn=partial(parallelize, reduce_dtype=config.reduce_dtype),
+                parallelize_fn=partial(parallelize, compute_dtype=getattr(torch, config.dtype)),
                 pipelining_fn=None,
                 post_optimizer_build_fn=None,
                 state_dict_adapter=None,
@@ -406,6 +416,9 @@ class TitanTrainer(TorchTitanTrainer):
                 seq_len=config.seq_len,
                 local_batch_size=config.local_batch_size,
                 global_batch_size=config.global_batch_size,
+                dtype="float32",
+                mixed_precision_param=config.dtype,
+                mixed_precision_reduce="float32",
                 max_norm=config.clip_grad_norm,
                 disable_cuda_graphs=True,
             ),
@@ -428,6 +441,7 @@ class TitanTrainer(TorchTitanTrainer):
                 loss_function=config.loss_fn,
                 val_steps=config.val_steps,
                 total_steps=config.steps,
+                compute_dtype=getattr(torch, config.dtype),
             ),
         ).build()
 
@@ -441,6 +455,7 @@ class Validation(Validator):
         loss_function: Loss
         val_steps: int | None
         total_steps: int
+        compute_dtype: torch.dtype = torch.bfloat16
 
     def __init__(  # noqa: PLR0913 -- torch titan validator interface.
         self,
@@ -464,6 +479,7 @@ class Validation(Validator):
         self.placeholder = None
         self.parallel_dims = parallel_dims
         self.loss = config.loss_function
+        self.compute_dtype = config.compute_dtype
         self.seq_len = seq_len
         self.local_batch_size = local_batch_size
         self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
@@ -524,8 +540,12 @@ class Validation(Validator):
                 # the distributed wrapper handles mixed precision; on one gpu, use autocast
                 with torch.autocast(
                     device_type=self.device.type,
-                    dtype=torch.bfloat16,
-                    enabled=self.device.type == "cuda" and not self.parallel_dims.dp_enabled,
+                    dtype=self.compute_dtype,
+                    enabled=(
+                        self.device.type == "cuda"
+                        and not self.parallel_dims.dp_enabled
+                        and self.compute_dtype != torch.float32
+                    ),
                 ):
                     logits = model(batch)
                 if exhausted:
