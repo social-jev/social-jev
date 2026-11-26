@@ -265,3 +265,10 @@ def test_distributional_calibration_averages_before_absolute_error():
     empty = compute_calibration([], [], bins=10)
     assert empty.ece is None
     assert sum(b["observations"] for b in empty.bins) == 0
+
+
+def test_calibration_rounds_final_ece_only():
+    """Round the aggregate while retaining full precision in bin measurements."""
+    result = compute_calibration([[0.987654, 0.012346]], [0], bins=10)
+    assert result.ece == 0.01
+    assert result.bins[9]["confidence"] == 0.987654

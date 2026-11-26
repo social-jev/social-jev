@@ -127,6 +127,6 @@ def compute_calibration(
         )
 
     return CalibrationMetrics(
-        ece=weighted_error / observations if observations else None,
+        ece=round(weighted_error / observations, 2) if observations else None,
         bins=bin_measurements,
     )
