@@ -66,6 +66,8 @@ GLM-5.3 Flash proposes rewrites by default, with requests routed through OpenRou
 
 For example, `reflection_lm="openai/gpt-5.1"` uses OpenAI credentials. `reflection_strategy=my_reflection_strategy` uses the supplied strategy. `custom_candidate_proposer` can replace the proposal step directly.
 
+A custom reflection model specified by name uses AsyncGEPA's LiteLLM backend. Install it with `uv pip install litellm`. The default reflection model does not require LiteLLM.
+
 ### Scheduling and sampling
 
 The scheduler determines when evaluations start. The sampler selects which existing candidates and training examples to use for new proposals. With continuous rollouts, the default scheduler can start new evaluations as others finish, including while reflection is in progress. `max_in_flight_rollouts=16` limits concurrent evaluations.
