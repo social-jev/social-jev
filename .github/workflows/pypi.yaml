@@ -80,7 +80,7 @@ jobs:
           path: dist/
 
   publish:
-    name: Publish to PyPI
+    name: Publish (PyPI)
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
