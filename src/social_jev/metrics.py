@@ -1,9 +1,9 @@
 """Metrics for batch evaluation."""
 
-from .types import Label
+from .types import QueryLabel
 
 
-def accuracy(predictions: list[list[float]], labels: list[Label]) -> float:
+def accuracy(predictions: list[list[float]], labels: list[QueryLabel]) -> float:
     """Return the fraction of top choices that match integer reference labels."""
     total = 0.0
     for probabilities, label in zip(predictions, labels, strict=True):
@@ -12,7 +12,7 @@ def accuracy(predictions: list[list[float]], labels: list[Label]) -> float:
     return total / len(labels)
 
 
-def f1(predictions: list[list[float]], labels: list[Label]) -> float:
+def f1(predictions: list[list[float]], labels: list[QueryLabel]) -> float:
     """Return binary F1 with option index 0 as the positive class."""
     true_positives = false_positives = false_negatives = 0
     for (positive, negative), label in zip(predictions, labels, strict=True):

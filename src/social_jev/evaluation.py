@@ -1,12 +1,9 @@
 """Evaluation inputs, named metrics, and batch results."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from statistics import fmean
 
-from .types import CalibrationBin, CalibrationMetrics, Label, Query, Request
-
-Metric = Callable[[list[list[float]], list[Label]], float | int]
-Metrics = Metric | list[Metric] | dict[str, Metric]
+from .types import CalibrationBin, CalibrationMetrics, Metric, Metrics, Query, QueryLabel, Request
 
 
 def get_named_metrics(metrics: Metrics) -> dict[str, Metric]:
@@ -89,7 +86,7 @@ def create_eval_requests(data, *, queries, metric_names):
 
 
 def compute_calibration(
-    probabilities: Sequence[Sequence[float]], labels: Sequence[Label], *, bins: int
+    probabilities: Sequence[Sequence[float]], labels: Sequence[QueryLabel], *, bins: int
 ) -> CalibrationMetrics:
     """Compute top-option ECE with an already validated positive bin count.
 

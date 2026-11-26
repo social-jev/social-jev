@@ -10,10 +10,10 @@ from transformers import AutoTokenizer
 
 from .config import SocialJevConfig
 from .data import Processor
-from .evaluation import Metrics, compute_calibration, create_eval_requests, get_named_metrics
+from .evaluation import compute_calibration, create_eval_requests, get_named_metrics
 from .integrations.context import active_provider
 from .metrics import accuracy
-from .types import EvaluationResult
+from .types import EvaluationResult, Metrics
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable

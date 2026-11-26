@@ -1,9 +1,8 @@
 """Typed document coding requests and results."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TypedDict
-
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -76,7 +75,14 @@ class Result(BaseModel):
     """Probabilities normalized over the supplied candidate answers."""
 
 
-Label = int | Sequence[float]
+type QueryLabel = int | Sequence[float]
+"""One query's label: an option index or probabilities over its options."""
+
+type Metric = Callable[[list[list[float]], list[QueryLabel]], float | int]
+"""Compute a score from option probabilities and their query labels."""
+
+type Metrics = Metric | list[Metric] | dict[str, Metric]
+"""One metric, a list of metrics, or metrics with explicit names."""
 
 
 class CalibrationBin(TypedDict):
@@ -107,15 +113,12 @@ class EvaluationResult:
 
     scores: dict[str, float | int]
     predictions: list[Result]
-    labels: list[Label]
+    labels: list[QueryLabel]
     calibration: CalibrationMetrics
+
 
 type OptionLogits = torch.Tensor
 """Model scores before softmax, shaped [queries, options]."""
-
-type QueryLabel = int | list[float]
-"""One query's label: an option index or probabilities over its options."""
-
 
 type OptionLabels = torch.Tensor
 """Reference probabilities in option order, shaped [queries, options]."""
