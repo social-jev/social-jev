@@ -23,7 +23,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
-from torch.distributed.fsdp import DataParallelMeshDims, MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torchtitan.components.checkpoint import CheckpointManager
 from torchtitan.components.dataloader import BaseDataLoader
 from torchtitan.components.loss import CrossEntropyLoss
@@ -198,20 +198,12 @@ def parallelize(model, *, parallel_dims, reduce_dtype, **kwargs):
     if not parallel_dims.dp_enabled:
         return model
     policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=reduce_dtype)
-    if parallel_dims.dp_shard == 1:
-        # replication only: every rank retains the complete model
-        fully_shard(
-            model,
-            mesh=parallel_dims.get_mesh("dp_replicate"),
-            dp_mesh_dims=DataParallelMeshDims(replicate="dp_replicate"),
-            mp_policy=policy,
-        )
-    else:
-        dims = ["dp_replicate", "fsdp"] if parallel_dims.dp_replicate_enabled else ["fsdp"]
-        mesh = parallel_dims.get_mesh(dims)
+    dims = ["dp_replicate", "fsdp"] if parallel_dims.dp_replicate_enabled else ["fsdp"]
+    mesh = parallel_dims.get_mesh(dims)
+    if parallel_dims.dp_shard > 1:
         for layer in model.backbone.layers:
             fully_shard(layer, mesh=mesh, mp_policy=policy)
-        fully_shard(model, mesh=mesh, mp_policy=policy)
+    fully_shard(model, mesh=mesh, mp_policy=policy)
     disable_fsdp_gradient_division(model)
     return model
 
