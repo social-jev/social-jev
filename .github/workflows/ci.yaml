@@ -52,12 +52,17 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
-      - run: |
+      - env:
+          HOOKS: ${{ matrix.hooks }}
+        run: |
+          extras=()
           if python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb")); exit("optim" not in p["project"].get("optional-dependencies", {}))'; then
-            uv sync --group dev --extra optim
-          else
-            uv sync --group dev
+            extras+=(--extra optim)
           fi
+          if [ "$HOOKS" = ty ]; then
+            extras+=(--extra train)
+          fi
+          uv sync --group dev "${extras[@]}"
       - run: uv run --frozen prek run ${{ matrix.hooks }} --all-files
 
   test_quality:
@@ -143,9 +148,9 @@ jobs:
       - name: Install dependencies with uv
         run: |
           if python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb")); exit("optim" not in p["project"].get("optional-dependencies", {}))'; then
-            uv sync --group dev --extra optim
+            uv sync --group dev --extra train --extra optim
           else
-            uv sync --group dev
+            uv sync --group dev --extra train
           fi
 
       - name: Run tests

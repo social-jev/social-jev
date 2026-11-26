@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from social_jev import Query, Request, SocialJev
+from social_jev.data import FormatStep, Sample, SampleStep, packed_batches
 
 
 def requests():
@@ -137,3 +138,92 @@ def test_transformers_loading_kwargs_reach_model(checkpoint, monkeypatch):
         assert len(model.query(requests())) == 2
     finally:
         model.stop()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA for FlexAttention")
+def test_packed_transformers_matches_independent_candidates(checkpoint):
+    model = SocialJev.from_pretrained(checkpoint)
+    items = requests()
+    encoded = model.processor.encode(items)
+    expected = model.processor.decode(model.engine.process(encoded.inputs), encoded)
+
+    batch = packed_batches(
+        FormatStep(items), model.processor.tokenizer, seq_len=256, local_batch_size=1
+    ).next()
+    assert batch is not None
+    model.engine.model.backbone.set_attn_implementation("flex_attention")
+    model.engine.model.to("cuda")
+    batch = batch.to("cuda")
+    with torch.no_grad():
+        logits = model.engine.model(batch)
+    actual = model.processor.decode(logits[batch.option_mask].tolist(), encoded)
+    for packed, split in zip(actual, expected, strict=True):
+        for result, reference in zip(packed, split, strict=True):
+            assert result.probabilities == pytest.approx(reference.probabilities, abs=1e-6)
+    model.stop()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA for FlexAttention")
+def test_packed_training_targets_follow_queries(checkpoint):
+    model = SocialJev.from_pretrained(checkpoint)
+    first, second = requests()
+
+    def source():
+        yield Sample(Sample.from_request(first).messages, [0, [0.1, 0.2, 0.7]])
+        yield Sample(Sample.from_request(second).messages, [1])
+
+    batches = packed_batches(
+        SampleStep(source, 0, 1, infinite=False, shuffle_buffer_size=1),
+        model.processor.tokenizer,
+        seq_len=128,
+        local_batch_size=2,
+    )
+    batch = batches.next()
+    assert batch is not None
+    assert batch.input_ids.shape[1] == 128
+    for row, boundaries in zip(batch.input_ids, batch.message_boundaries, strict=True):
+        assert (row[boundaries[-1] + 1 :] == model.processor.tokenizer.pad_token_id).all()
+    assert batch.labels is not None
+    assert batch.labels.flatten().tolist() == pytest.approx([1, 0, 0, 0.1, 0.2, 0.7, 0, 1, 0])
+    model.engine.model.backbone.set_attn_implementation("flex_attention")
+    model.engine.model.to("cuda")
+    batch = batch.to("cuda")
+    logits = model.engine.model(batch)
+    assert batch.labels is not None
+    assert logits.shape == batch.labels.shape
+    assert torch.equal(logits.isneginf(), batch.option_indices < 0)
+    log_probs = logits.float().log_softmax(-1).masked_fill(batch.option_indices < 0, 0)
+    loss = -(batch.labels * log_probs).sum() / len(batch.labels)
+    loss.backward()
+    assert model.engine.model.decision_head.network[-1].weight.grad.isfinite().all()
+    model.stop()
+
+
+def test_dcp_loading_and_hf_export_preserve_predictions(checkpoint, tmp_path):
+    import torch.distributed.checkpoint as dcp  # noqa: PLC0415 -- checkpoint exercise.
+
+    from social_jev.transformers import SocialJevModel  # noqa: PLC0415 -- model export.
+
+    original = SocialJev.from_pretrained(checkpoint, dtype=torch.bfloat16)
+    expected = original.query(requests())
+    saved = tmp_path / "step-10"
+    state = dict(original.engine.model.state_dict())
+    state["optimizer"] = {"exp_avg": torch.ones(4)}
+    with pytest.warns(UserWarning, match="torch.distributed"):
+        dcp.save(state, checkpoint_id=saved, no_dist=True)
+    original.engine.model.config.save_pretrained(saved)
+    original.processor.tokenizer.save_pretrained(saved)
+    with pytest.warns(UserWarning, match="torch.distributed"):
+        loaded = SocialJev.from_pretrained(saved)
+    assert loaded.engine.model.dtype == torch.bfloat16
+    assert loaded.query(requests()) == expected
+    assert loaded.processor.tokenizer.chat_template == original.processor.tokenizer.chat_template
+
+    destination = tmp_path / "hf-export"
+    loaded.engine.model.save_pretrained(destination, max_shard_size="5GB")
+    restored = SocialJevModel.from_pretrained(destination, dtype="auto")
+    for name, value in original.engine.model.state_dict().items():
+        torch.testing.assert_close(restored.state_dict()[name], value)
+    assert restored.tokenizer.get_vocab() == original.processor.tokenizer.get_vocab()
+    original.stop()
+    loaded.stop()

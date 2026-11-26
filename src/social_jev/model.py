@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from transformers import AutoTokenizer
 
-from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
+from .config import SocialJevConfig
 from .data import Processor
-from .evaluation import Metrics, compute_calibration, create_eval_requests, get_named_metrics
+from .evaluation import compute_calibration, create_eval_requests, get_named_metrics
 from .integrations.context import active_provider
 from .metrics import accuracy
-from .types import EvaluationResult
+from .types import EvaluationResult, Metrics
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from transformers import PreTrainedTokenizerBase
 
+    from .data import Sample
     from .integrations.context import RemoteClient
     from .optim import OptimizationResult
+    from .training import TrainConfig
     from .types import Query, Request, Result
 
 
@@ -103,12 +108,25 @@ class SocialJev:
         if provider is not None:
             remote = provider.start(str(repo), backend=backend, serve=serve, **kwargs)
             return cls(None, None, serve=serve, remote=remote)
+        if isinstance(repo, Path):
+            repo = repo.expanduser().resolve()
+        else:
+            checkpoint_config = SocialJevConfig.from_pretrained(
+                repo,
+                revision=kwargs.get("revision") or "main",
+                token=kwargs.get("hf_token") if backend == "vllm" else kwargs.get("token"),
+                local_files_only=kwargs.get("local_files_only", False),
+            )
+            kwargs["revision"] = getattr(checkpoint_config, "_commit_hash", None) or kwargs.get(
+                "revision"
+            )
         if backend == "transformers":
             from .transformers import TransformersEngine  # noqa: PLC0415
 
             engine = TransformersEngine(repo, **kwargs)
             tokenizer = engine.tokenizer
         else:
+            repo = str(repo)
             tokenizer = AutoTokenizer.from_pretrained(repo, revision=kwargs.get("revision"))
             if serve:
                 from .vllm.server import Server  # noqa: PLC0415
@@ -225,3 +243,26 @@ class SocialJev:
             self.remote.close()
         else:
             self.engine.stop()
+
+    @staticmethod
+    def train(  # noqa: PLR0913 -- public training inputs and output destinations.
+        *,
+        repo: str | Path,
+        revision: str | None = None,
+        trainset: Callable[[], Iterable[Sample]],
+        valset: Callable[[], Iterable[Sample]] | None = None,
+        config: TrainConfig,
+        run_dir: str | Path | None = None,
+        final_save_to: str | Path | None = None,
+    ) -> None:
+        """Train from a checkpoint and save the requested outputs."""
+        from .training import Trainer  # noqa: PLC0415 -- optional training dependencies.
+
+        Trainer(
+            config,
+            repo=repo,
+            revision=revision,
+            trainset=trainset,
+            valset=valset,
+            run_dir=run_dir,
+        ).run(final_save_to=final_save_to)

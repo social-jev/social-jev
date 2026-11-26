@@ -6,12 +6,13 @@ license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["torch>=2.13", "transformers>=5.17,<6", "pydantic>=2"]
+dependencies = ["torch>=2.14,<2.15", "transformers>=5.17,<6", "pydantic>=2"]
 
 [project.optional-dependencies]
 compute = ["modal", "vastai", "httpx", "fastapi", "uvicorn", "huggingface-hub>=1.33"]
-vllm = ["vllm==0.31.0", "httpx"]
+vllm = ["vllm==0.33.0", "httpx"]
 optim = ["async-gepa", "instructor>=1.17"]
+train = ["huggingface-hub", "torchtitan==0.3.0; sys_platform == 'linux'"]
 
 [project.entry-points."vllm.general_plugins"]
 social_jev = "social_jev.vllm.plugin:register"
@@ -68,7 +69,11 @@ addopts = [
     "--cov-fail-under=80",
 ]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # PyTorch's own MKLDNN module still uses its deprecated TorchScript API.
+    "ignore:.*torch.jit.*is deprecated:DeprecationWarning:torch.jit._script",
+]
 
 
 [tool.ruff]
