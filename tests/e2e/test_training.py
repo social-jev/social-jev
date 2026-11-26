@@ -1,6 +1,7 @@
 """Exercise training orchestration on CPU when the TorchTitan runtime is installed."""
 
 import json
+import logging
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
@@ -21,6 +22,7 @@ pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training import BrierLoss, CrossEntropy, FocalLoss, TrainConfig
+from social_jev.training.logging import Logger
 from social_jev.training.trainer import (
     TitanLoader,
     TitanModel,
@@ -116,7 +118,7 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device):
     assert wrapped.training
     logged, step, extras = metrics.log_validation.call_args.args
     assert step == 0
-    assert extras["eval/language/en/loss"] == pytest.approx(logged)
+    assert extras["validation_metrics/language/en/loss"] == pytest.approx(logged)
     assert 0 <= logged <= 2
     assert all(parameter.grad is None for parameter in wrapped.parameters())
     model.stop()
@@ -552,3 +554,26 @@ def test_validation_partitions_samples_and_excludes_placeholders(checkpoint, tmp
     )
     forwards = [json.loads((tmp_path / f"rank-{rank}.json").read_text()) for rank in range(2)]
     assert forwards == [[2.0] * ((count + 1) // 2)] * 2
+
+
+def test_training_logs_metrics_and_plain_text(tmp_path, caplog):
+    """Persist Titan output without changing terminal messages or leaking handlers."""
+    downstream = Mock()
+    output = Logger(tmp_path, downstream)
+    try:
+        logging.getLogger().warning("\x1b[31mcheckpoint saved\x1b[0m")
+        output.log({"validation_metrics/loss": 0.25}, 10)
+        assert json.loads((tmp_path / "metrics.jsonl").read_text()) == {
+            "step": 10,
+            "validation_metrics/loss": 0.25,
+        }
+        text = (tmp_path / "run.log").read_text()
+        assert "checkpoint saved" in text
+        assert "\x1b" not in text
+        assert "\x1b[31m" in caplog.records[-1].getMessage()
+        downstream.log.assert_called_once_with({"validation_metrics/loss": 0.25}, 10)
+    finally:
+        output.close()
+    assert output.file_handler not in logging.getLogger().handlers
+    assert output.metrics_file.closed
+    downstream.close.assert_called_once()

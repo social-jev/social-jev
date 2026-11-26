@@ -44,6 +44,7 @@ from transformers import AutoTokenizer
 from ..config import SocialJevConfig
 from ..data import SampleStep, packed_batches
 from ..transformers import SocialJevModel, is_dcp_checkpoint
+from .logging import Logger
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 from .lr_schedule import LRSchedule, WarmupStableDecay
 
@@ -278,6 +279,11 @@ class TitanTrainer(TorchTitanTrainer):
         super().__init__(config)
         self.checkpointer.tokenizer = self.tokenizer.tokenizer
         self.loss = config.loss_fn
+        if dist.get_rank() == 0:
+            self.metrics_processor.logger = Logger(
+                directory=Path(self.config.dump_folder),
+                metrics_logger=self.metrics_processor.logger,
+            )
 
     def init_distributed(self):
         """Initialize ranks and resolve their shared output directory."""
@@ -534,10 +540,10 @@ class Validation(Validator):
                 observations.append((losses.cpu(), batch.metadata))
             if self.group is not None:
                 dist.all_reduce(totals, group=self.group)
-            categories = metadata_metrics(observations, "eval", self.group)
+            categories = metadata_metrics(observations, "validation_metrics", self.group)
             if totals[1].item():
                 mean = (totals[0] / totals[1]).item()
-                self.metrics_processor.log_validation(mean, step, {"eval/loss": mean, **categories})
+                self.metrics_processor.log_validation(mean, step, categories)
             self.last_step = step
         finally:
             self.placeholder = None
