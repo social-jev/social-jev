@@ -9,13 +9,17 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
+from .evaluation import Metrics, compute_calibration, create_eval_requests, get_named_metrics
 from .integrations.context import active_provider
+from .metrics import accuracy
+from .types import EvaluationResult
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
     from .integrations.context import RemoteClient
-    from .types import Request, Result
+    from .optim import OptimizationResult
+    from .types import Query, Request, Result
 
 
 class SocialJev:
@@ -135,6 +139,85 @@ class SocialJev:
         encoded = await asyncio.to_thread(self.processor.encode, requests)
         scores = await self.engine.aprocess(encoded.inputs)
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
+
+    def evaluate(
+        self,
+        *,
+        data,
+        queries: Query | list[Query] | None = None,
+        metrics: Metrics = accuracy,
+        calibration_bins: int = 10,
+    ) -> EvaluationResult:
+        """Score shared or per-row queries with named metrics on selected decisions."""
+        if type(calibration_bins) is not int or calibration_bins < 1:
+            message = "calibration_bins must be a positive integer."
+            raise ValueError(message)
+        named_metrics = get_named_metrics(metrics)
+        requests, labels, selected_metrics = create_eval_requests(
+            data, queries=queries, metric_names=named_metrics
+        )
+        predictions = [prediction for results in self.query(requests) for prediction in results]
+        submitted_queries = [query for request in requests for query in request.queries]
+        probabilities = [
+            [prediction.probabilities[option] for option in query.options]
+            for prediction, query in zip(predictions, submitted_queries, strict=True)
+        ]
+        scores = {}
+        for name, metric in named_metrics.items():
+            # find the submitted queries that requested this metric
+            queries_for_metric = [i for i, names in enumerate(selected_metrics) if name in names]
+            if queries_for_metric:
+                # apply metric to selected queries
+                scores[name] = metric(
+                    [probabilities[i] for i in queries_for_metric],
+                    [labels[i] for i in queries_for_metric],
+                )
+        return EvaluationResult(
+            scores=scores,
+            predictions=predictions,
+            labels=labels,
+            calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
+        )
+
+    def optimize(
+        self, *, query: Query, trainset, valset=None, metric=None, **kwargs
+    ) -> OptimizationResult:
+        """Optimize a query and its options against labeled examples using AsyncGEPA.
+
+        Pass GEPA lists or data loaders as trainset and valset. Continuous rollouts
+        are enabled by default and use the async vLLM backend. Other optimizer
+        arguments, including the sampling strategy and budget, go to AsyncGEPA.
+        """
+        from async_gepa import optimize  # noqa: PLC0415
+
+        from social_jev.optim import (  # noqa: PLC0415
+            AsyncGEPAAdapter,
+            GEPAAdapter,
+            OptimizationResult,
+            accuracy,
+            get_proposer_kwargs,
+            get_scheduler_kwargs,
+        )
+
+        scheduler_kwargs = get_scheduler_kwargs(kwargs)
+        adapter_class = (
+            AsyncGEPAAdapter if scheduler_kwargs["scheduler"] is not None else GEPAAdapter
+        )
+        adapter = adapter_class(self, query, accuracy if metric is None else metric)
+        proposer_kwargs = get_proposer_kwargs(kwargs)
+        result = optimize(
+            seed_candidate={"query": query.model_dump_json()},
+            trainset=trainset,
+            valset=valset,
+            adapter=adapter,
+            **scheduler_kwargs,
+            **proposer_kwargs,
+            **kwargs,
+        )
+        return OptimizationResult(
+            query=adapter.candidate_query(result.candidates[result.best_idx]),
+            result=result,
+        )
 
     def stop(self):
         """Release model resources and stop any server launched by this instance."""
