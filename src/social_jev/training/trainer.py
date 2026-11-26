@@ -357,11 +357,16 @@ class TitanTrainer(TorchTitanTrainer):
         replicate_degree = config.data_parallel_replicate_degree
         if replicate_degree is None:
             replicate_degree = world_size // config.data_parallel_shard_degree
+        optimizer_kwargs = {
+            "weight_decay": config.weight_decay,
+            "betas": config.betas,
+            "eps": config.eps,
+        }
         groups = [
             ParamGroupConfig(
                 pattern=r"^decision_head\.",
                 optimizer_name="AdamW",
-                optimizer_kwargs={"lr": config.head_lr},
+                optimizer_kwargs={**optimizer_kwargs, "lr": config.head_lr},
             ),
         ]
         if config.backbone_lr is not None:
@@ -369,7 +374,7 @@ class TitanTrainer(TorchTitanTrainer):
                 ParamGroupConfig(
                     pattern=r"^backbone\.",
                     optimizer_name="AdamW",
-                    optimizer_kwargs={"lr": config.backbone_lr},
+                    optimizer_kwargs={**optimizer_kwargs, "lr": config.backbone_lr},
                 ),
             )
         return cls.Config(
@@ -409,6 +414,7 @@ class TitanTrainer(TorchTitanTrainer):
                 seq_len=config.seq_len,
                 local_batch_size=config.local_batch_size,
                 global_batch_size=config.global_batch_size,
+                max_norm=config.clip_grad_norm,
                 disable_cuda_graphs=True,
             ),
             parallelism=ParallelismConfig(

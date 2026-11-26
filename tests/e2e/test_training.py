@@ -242,6 +242,13 @@ def test_training_configures_replication_and_checkpoints(tmp_path, monkeypatch, 
     )
     assert config.parallelism.data_parallel_replicate_degree == replicas
     assert config.parallelism.data_parallel_shard_degree == shards
+    assert config.training.max_norm == 1.0
+    assert config.optimizer.param_groups[0].optimizer_kwargs == {
+        "lr": 1e-3,
+        "weight_decay": 0.1,
+        "betas": (0.9, 0.95),
+        "eps": 1e-8,
+    }
     assert config.metrics.log_freq == 1
     assert config.validator.val_steps == 10
     assert config.checkpoint.enable

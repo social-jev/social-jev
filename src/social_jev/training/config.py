@@ -21,6 +21,14 @@ class TrainConfig:
     reduce_dtype: torch.dtype = torch.float32
     head_lr: float = 1e-3
     backbone_lr: float | None = None
+    weight_decay: float = 0.1
+    """AdamW weight decay for trainable head and backbone parameters."""
+    betas: tuple[float, float] = (0.9, 0.95)
+    """AdamW decay factors for the first and second gradient moments."""
+    eps: float = 1e-8
+    """AdamW denominator constant for numerical stability."""
+    clip_grad_norm: float = 1.0
+    """Maximum gradient norm across trainable parameters before an update."""
     log_steps: int = 1
     """Log training metrics every this many optimizer updates."""
     val_steps: int | None = 10
