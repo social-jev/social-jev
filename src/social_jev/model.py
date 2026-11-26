@@ -9,9 +9,10 @@ from transformers import AutoTokenizer
 
 from . import config  # noqa: F401 -- Register the checkpoint configuration before loading.
 from .data import Processor
-from .evaluation import EvaluationResult, Metrics, create_eval_requests, get_named_metrics
+from .evaluation import Metrics, compute_calibration, create_eval_requests, get_named_metrics
 from .integrations.context import active_provider
 from .metrics import accuracy
+from .types import EvaluationResult
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -140,9 +141,17 @@ class SocialJev:
         return await asyncio.to_thread(self.processor.decode, scores, encoded)
 
     def evaluate(
-        self, *, data, queries: Query | list[Query] | None = None, metrics: Metrics = accuracy
+        self,
+        *,
+        data,
+        queries: Query | list[Query] | None = None,
+        metrics: Metrics = accuracy,
+        calibration_bins: int = 10,
     ) -> EvaluationResult:
         """Score shared or per-row queries with named metrics on selected decisions."""
+        if type(calibration_bins) is not int or calibration_bins < 1:
+            message = "calibration_bins must be a positive integer."
+            raise ValueError(message)
         named_metrics = get_named_metrics(metrics)
         requests, labels, selected_metrics = create_eval_requests(
             data, queries=queries, metric_names=named_metrics
@@ -163,7 +172,12 @@ class SocialJev:
                     [probabilities[i] for i in queries_for_metric],
                     [labels[i] for i in queries_for_metric],
                 )
-        return EvaluationResult(scores=scores, predictions=predictions, labels=labels)
+        return EvaluationResult(
+            scores=scores,
+            predictions=predictions,
+            labels=labels,
+            calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
+        )
 
     def optimize(
         self, *, query: Query, trainset, valset=None, metric=None, **kwargs

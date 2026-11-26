@@ -1,5 +1,9 @@
 """Typed document coding requests and results."""
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import TypedDict
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -68,3 +72,38 @@ class Result(BaseModel):
     """Candidate answer with the highest probability."""
     probabilities: dict[str, float]
     """Probabilities normalized over the supplied candidate answers."""
+
+
+Label = int | Sequence[float]
+
+
+class CalibrationBin(TypedDict):
+    """Top-option confidence and correctness in a lower-inclusive bin.
+
+    The last bin also includes its upper boundary. For probability-vector
+    labels, accuracy is the mean target probability of the predicted option.
+    """
+
+    lower: float
+    upper: float
+    observations: int
+    confidence: float | None
+    accuracy: float | None
+
+
+@dataclass
+class CalibrationMetrics:
+    """Binned top-option ECE and measurements; empty data has no ECE."""
+
+    ece: float | None
+    bins: list[CalibrationBin]
+
+
+@dataclass
+class EvaluationResult:
+    """Named scores, ordered predictions and labels, and calibration metrics."""
+
+    scores: dict[str, float | int]
+    predictions: list[Result]
+    labels: list[Label]
+    calibration: CalibrationMetrics

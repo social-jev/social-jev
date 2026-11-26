@@ -1,6 +1,6 @@
 """Metrics for batch evaluation."""
 
-from .evaluation import Label
+from .types import Label
 
 
 def accuracy(predictions: list[list[float]], labels: list[Label]) -> float:
