@@ -4,6 +4,7 @@ import pytest
 from datasets import Dataset
 
 from social_jev import Query, Result, SocialJev
+from social_jev.evaluation import compute_calibration
 from social_jev.metrics import accuracy, f1
 
 
@@ -153,7 +154,7 @@ def test_distributional_labels(mode):
     elif mode == "custom":
         kwargs = {}
         row.update(query=query.text, options=query.options)
-    result = model.evaluate(data=[row], metrics=distribution_score, **kwargs)
+    result = model.evaluate(data=[row], metrics=distribution_score, queries=kwargs.get("queries"))
     assert result.scores["distribution_score"] == pytest.approx(0.6 if mode == "multiple" else 0.8)
 
 
@@ -203,3 +204,64 @@ def test_duplicate_callable_names_require_explicit_keys():
     with pytest.raises(ValueError, match="distinct names"):
         model.evaluate(data=[], metrics=[accuracy, accuracy])
     assert model.calls == []
+
+
+@pytest.mark.parametrize("bins", [0, -1, 1.5, True])
+def test_invalid_calibration_bins_fail_before_inference(bins):
+    """Reject invalid bin counts without submitting model work."""
+    model = EvaluationModel()
+    with pytest.raises(ValueError, match="calibration_bins"):
+        model.evaluate(data=[], calibration_bins=bins)
+    assert model.calls == []
+
+
+def test_evaluation_always_returns_calibration():
+    """Default calibration reuses the single inference call and ignores metric selection."""
+    model = EvaluationModel()
+    result = model.evaluate(
+        queries=Query(text="Relevant?", options=["Yes", "No"]),
+        data=[{"state": "0", "label": 0}, {"state": "0", "label": 1}],
+        metrics=[],
+    )
+    assert len(model.calls) == 1
+    assert result.scores == {}
+    assert len(result.calibration.bins) == 10
+    assert result.calibration.ece == 0.5
+    assert result.calibration.bins[-1] == {
+        "lower": 0.9,
+        "upper": 1.0,
+        "observations": 2,
+        "confidence": 1.0,
+        "accuracy": 0.5,
+    }
+    assert result.calibration.bins[0] == {
+        "lower": 0.0,
+        "upper": 0.1,
+        "observations": 0,
+        "confidence": None,
+        "accuracy": None,
+    }
+
+
+def test_calibration_boundaries_and_weighted_error():
+    """Place exact boundaries in the next bin and weight gaps by observations."""
+    probabilities = [[0.5, 0.5], [0.1, 0.9], [0.2, 0.8], [0.0, 1.0]]
+    labels = [0, 1, 0, 1]
+    result = compute_calibration(probabilities, labels, bins=10)
+    assert [b["observations"] for b in result.bins] == [0, 0, 0, 0, 0, 1, 0, 0, 1, 2]
+    # Gaps: .5 for one observation, .8 for one, .05 for two.
+    assert result.ece == pytest.approx(0.35)
+    assert result.bins[9]["confidence"] == pytest.approx(0.95)
+    one_hot = [[float(i == label) for i in range(2)] for label in labels]
+    assert compute_calibration(probabilities, one_hot, bins=10) == result
+
+
+def test_distributional_calibration_averages_before_absolute_error():
+    """Opposite errors within a bin cancel; this is not per-example absolute error."""
+    result = compute_calibration([[0.1, 0.9], [0.1, 0.9]], [[0.2, 0.8], [0.0, 1.0]], bins=20)
+    assert len(result.bins) == 20
+    assert result.ece == pytest.approx(0.0)
+    assert result.bins[18]["accuracy"] == pytest.approx(0.9)
+    empty = compute_calibration([], [], bins=10)
+    assert empty.ece is None
+    assert sum(b["observations"] for b in empty.bins) == 0

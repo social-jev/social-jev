@@ -1,22 +1,12 @@
 """Evaluation inputs, named metrics, and batch results."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from statistics import fmean
 
-from .types import Query, Request, Result
+from .types import CalibrationBin, CalibrationMetrics, Label, Query, Request
 
-Label = int | Sequence[float]
 Metric = Callable[[list[list[float]], list[Label]], float | int]
 Metrics = Metric | list[Metric] | dict[str, Metric]
-
-
-@dataclass
-class EvaluationResult:
-    """Named scores and flat predictions and labels in document/query order."""
-
-    scores: dict[str, float | int]
-    predictions: list[Result]
-    labels: list[Label]
 
 
 def get_named_metrics(metrics: Metrics) -> dict[str, Metric]:
@@ -96,3 +86,47 @@ def create_eval_requests(data, *, queries, metric_names):
         labels.extend(row_labels)
         selected_metrics.extend([names] * len(row_queries))
     return requests, labels, selected_metrics
+
+
+def compute_calibration(
+    probabilities: Sequence[Sequence[float]], labels: Sequence[Label], *, bins: int
+) -> CalibrationMetrics:
+    """Compute top-option ECE with an already validated positive bin count.
+
+    Vector labels are interpreted as target probabilities, not normalized here.
+    Integer labels and their one-hot equivalents give identical measurements.
+    No user-supplied metrics are needed for this calculation.
+    """
+    groups: list[list[tuple[float, float]]] = [[] for _ in range(bins)]
+    for prediction, label in zip(probabilities, labels, strict=True):
+        choice = max(range(len(prediction)), key=prediction.__getitem__)
+        confidence = prediction[choice]
+        target = float(choice == label) if isinstance(label, int) else label[choice]
+        bucket = min(int(confidence * bins), bins - 1)
+        groups[bucket].append((confidence, target))
+
+    bin_measurements: list[CalibrationBin] = []
+    weighted_error = 0.0
+    observations = 0
+    for bucket, rows in enumerate(groups):
+        confidence = accuracy = None
+        if rows:
+            confidences, correctness = zip(*rows, strict=True)
+            confidence = fmean(confidences)
+            accuracy = fmean(correctness)
+            weighted_error += len(rows) * abs(confidence - accuracy)
+            observations += len(rows)
+        bin_measurements.append(
+            {
+                "lower": bucket / bins,
+                "upper": (bucket + 1) / bins,
+                "observations": len(rows),
+                "confidence": confidence,
+                "accuracy": accuracy,
+            }
+        )
+
+    return CalibrationMetrics(
+        ece=weighted_error / observations if observations else None,
+        bins=bin_measurements,
+    )
