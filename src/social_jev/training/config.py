@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ..evaluation import OnlineEval
 from .loss import FocalLoss, Loss
 from .lr_schedule import LRSchedule, WarmupStableDecay
 
@@ -33,6 +34,10 @@ class TrainConfig:
     """Log training metrics every this many optimizer updates."""
     val_steps: int | None = 10
     """Validate every this many updates, plus before and after training."""
+    evaluations: dict[str, OnlineEval] = field(default_factory=dict)
+    """Named benchmarks using the same datasets and metrics as evaluate()."""
+    eval_steps: int | None = 10
+    """Evaluate benchmarks every this many updates, plus before and after training."""
     checkpoint_steps: int | None = None
     shuffle_buffer_size: int = 256
     loss_fn: Loss = field(default_factory=FocalLoss)
@@ -49,6 +54,7 @@ class TrainConfig:
             "shuffle_buffer_size",
             "log_steps",
             "val_steps",
+            "eval_steps",
             "checkpoint_steps",
         ):
             value = getattr(self, name)

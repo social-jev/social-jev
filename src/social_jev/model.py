@@ -10,10 +10,9 @@ from transformers import AutoTokenizer
 
 from .config import SocialJevConfig
 from .data import Processor
-from .evaluation import compute_calibration, create_eval_requests, get_named_metrics
+from .evaluation import evaluate
 from .integrations.context import active_provider
 from .metrics import accuracy
-from .types import EvaluationResult, Metrics
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
     from .integrations.context import RemoteClient
     from .optim import OptimizationResult
     from .training import TrainConfig
-    from .types import Query, Request, Result
+    from .types import EvaluationResult, Metrics, Query, Request, Result
 
 
 class SocialJev:
@@ -167,34 +166,8 @@ class SocialJev:
         calibration_bins: int = 10,
     ) -> EvaluationResult:
         """Score shared or per-row queries with named metrics on selected decisions."""
-        if type(calibration_bins) is not int or calibration_bins < 1:
-            message = "calibration_bins must be a positive integer."
-            raise ValueError(message)
-        named_metrics = get_named_metrics(metrics)
-        requests, labels, selected_metrics = create_eval_requests(
-            data, queries=queries, metric_names=named_metrics
-        )
-        predictions = [prediction for results in self.query(requests) for prediction in results]
-        submitted_queries = [query for request in requests for query in request.queries]
-        probabilities = [
-            [prediction.probabilities[option] for option in query.options]
-            for prediction, query in zip(predictions, submitted_queries, strict=True)
-        ]
-        scores = {}
-        for name, metric in named_metrics.items():
-            # find the submitted queries that requested this metric
-            queries_for_metric = [i for i, names in enumerate(selected_metrics) if name in names]
-            if queries_for_metric:
-                # apply metric to selected queries
-                scores[name] = metric(
-                    [probabilities[i] for i in queries_for_metric],
-                    [labels[i] for i in queries_for_metric],
-                )
-        return EvaluationResult(
-            scores=scores,
-            predictions=predictions,
-            labels=labels,
-            calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
+        return evaluate(
+            self, data=data, queries=queries, metrics=metrics, calibration_bins=calibration_bins
         )
 
     def optimize(
