@@ -539,9 +539,10 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         )
         validator.validate([model], 0)
         expected = metrics.log_validation.call_args.args[2]
-        validator.dp_rank = rank
-        validator.dp_world_size = 2
-        validator.group = torch.distributed.group.WORLD
+        validation = validator.tasks[0]
+        validation.dp_rank = rank
+        validation.dp_world_size = 2
+        validation.group = torch.distributed.group.WORLD
         forwards = []
 
         def synchronize_forward(_model, _inputs, _output):
