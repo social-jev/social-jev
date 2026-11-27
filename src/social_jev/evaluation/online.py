@@ -1,6 +1,6 @@
 """Datasets and scoring functions to evaluate during training."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
 from ..metrics import accuracy
@@ -19,6 +19,12 @@ class OnlineEvaluation:
 
     def __post_init__(self):
         validate_calibration_bins(self.calibration_bins)
+        if isinstance(self.data, Iterator):
+            message = (
+                "Online evaluation needs a reusable dataset "
+                "or a callable returning a fresh iterator."
+            )
+            raise TypeError(message)
 
     def prepare(self):
         """Build ordered requests, labels, and metric selections for this evaluation."""

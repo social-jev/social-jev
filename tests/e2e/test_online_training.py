@@ -45,6 +45,11 @@ def query_count(_probabilities, labels):
     return len(labels)
 
 
+def order_score(probabilities, _labels):
+    """Make swapping predictions between different rows change the reported score."""
+    return sum(index * row[0] for index, row in enumerate(probabilities, start=1))
+
+
 def benchmark(count):
     return OnlineEvaluation(
         data=[{"state": "S", "label": [i % 2, [0.2, 0.3, 0.5]]} for i in range(count)],
@@ -121,7 +126,13 @@ def run_distributed_benchmark(rank, checkpoint, directory, count):
         loaded = SocialJev.from_pretrained(checkpoint)
         model = OptionTokenModel()
         metrics = Mock()
-        evaluation = benchmark(count)
+        evaluation = OnlineEvaluation(
+            data=[
+                {"state": "S", "query": "Q", "options": options, "label": index % len(options)}
+                for index, options in enumerate([["A", "B"], ["B", "A"], ["C", "A", "B"]][:count])
+            ],
+            metrics={"accuracy": accuracy, "queries": query_count, "order": order_score},
+        )
         expected = SocialJev(loaded.processor, model).evaluate(
             data=evaluation.data,
             queries=evaluation.queries,
@@ -145,7 +156,8 @@ def run_distributed_benchmark(rank, checkpoint, directory, count):
         if rank == 0:
             values = metrics.logger.log.call_args.args[0]
             assert values["evaluation_metrics/benchmark/accuracy"] == expected.scores["accuracy"]
-            assert values["evaluation_metrics/benchmark/queries"] == 2 * count
+            assert values["evaluation_metrics/benchmark/queries"] == count
+            assert values["evaluation_metrics/benchmark/order"] == expected.scores["order"]
             assert (
                 values["evaluation_metrics/benchmark/calibration/ece"] == expected.calibration.ece
             )
@@ -167,7 +179,7 @@ def test_online_evaluation_partitions_data_and_excludes_placeholder_scores(
         run_distributed_benchmark, args=(checkpoint, tmp_path, count), nprocs=2
     )
     calls = [json.loads((tmp_path / f"rank-{rank}.json").read_text()) for rank in range(2)]
-    assert calls == [[2.0] * (2 * ((count + 1) // 2))] * 2
+    assert calls == [[2.0] * ((count + 1) // 2)] * 2
 
 
 def test_training_enables_benchmarks_without_a_validation_set(monkeypatch):

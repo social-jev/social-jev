@@ -1,5 +1,7 @@
 """Online benchmarks use the standalone evaluation's data and score contract."""
 
+import pytest
+
 from social_jev.evaluation import OnlineEvaluation
 from social_jev.metrics import accuracy
 from social_jev.types import Query
@@ -23,3 +25,8 @@ def test_online_dataset_factory_preserves_query_labels_and_metric_selection():
     assert [query.text for query in requests[0].queries] == ["First?", "Second?"]
     assert labels == [1, [0.75, 0.25]]
     assert selected_metrics == [["accuracy"], ["accuracy"]]
+
+
+def test_online_evaluation_requires_repeatable_data():
+    with pytest.raises(TypeError, match="fresh iterator"):
+        OnlineEvaluation(data=iter([{"state": "A", "label": 0}]))
