@@ -11,8 +11,12 @@ from torchtitan.components.validate import Validator as TitanValidator
 from torchtitan.tools.logging import logger
 
 from ..data import Sample, SampleStep, packed_batches
-from ..evaluation import OnlineEval  # noqa: TC001 -- runtime configuration field type.
-from ..evaluation.core import create_eval_requests, get_named_metrics, score_evaluation
+from ..evaluation import (
+    OnlineEval,
+    create_eval_requests,
+    get_named_metrics,
+    score_evaluation,
+)
 from .logging import metadata_metrics
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 

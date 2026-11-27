@@ -1,9 +1,11 @@
-"""Evaluation inputs, named metrics, and batch results."""
+"""Dataset evaluation and benchmark configuration for training."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from statistics import fmean
 
-from ..types import (
+from .metrics import accuracy
+from .types import (
     CalibrationBin,
     CalibrationMetrics,
     EvaluationResult,
@@ -14,6 +16,32 @@ from ..types import (
     Request,
     Result,
 )
+
+# --- Online evaluation configuration -----------------------------------------
+
+
+@dataclass(kw_only=True)
+class OnlineEval:
+    """Evaluate a reusable dataset or factory with the same inputs as evaluate()."""
+
+    data: Iterable[dict] | Callable[[], Iterable[dict]]
+    queries: Query | list[Query] | None = None
+    metrics: Metrics = accuracy
+    calibration_bins: int = 10
+
+    def __post_init__(self):
+        if type(self.calibration_bins) is not int or self.calibration_bins < 1:
+            message = "calibration_bins must be a positive integer."
+            raise ValueError(message)
+        if isinstance(self.data, Iterator):
+            message = (
+                "Online evaluation needs a reusable dataset "
+                "or a callable returning a fresh iterator."
+            )
+            raise TypeError(message)
+
+
+# --- Dataset and metric preparation ------------------------------------------
 
 
 def get_named_metrics(metrics: Metrics) -> dict[str, Metric]:
@@ -95,6 +123,9 @@ def create_eval_requests(data, *, queries, metric_names):
     return requests, labels, selected_metrics
 
 
+# --- Scoring and calibration -------------------------------------------------
+
+
 def compute_calibration(
     probabilities: Sequence[Sequence[float]], labels: Sequence[QueryLabel], *, bins: int
 ) -> CalibrationMetrics:
@@ -164,4 +195,32 @@ def score_evaluation(  # noqa: PLR0913 -- shared evaluation inputs.
         predictions=predictions,
         labels=labels,
         calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
+    )
+
+
+# --- Evaluation through the query API ----------------------------------------
+
+
+def evaluate(model, *, data, queries=None, metrics=accuracy, calibration_bins=10):
+    """Submit the dataset and score its ordered predictions."""
+    if type(calibration_bins) is not int or calibration_bins < 1:
+        message = "calibration_bins must be a positive integer."
+        raise ValueError(message)
+
+    requests, labels, selected_metrics = create_eval_requests(
+        data, queries=queries, metric_names=get_named_metrics(metrics)
+    )
+    predictions = [prediction for results in model.query(requests) for prediction in results]
+    submitted_queries = [query for request in requests for query in request.queries]
+    probabilities = [
+        [prediction.probabilities[option] for option in query.options]
+        for prediction, query in zip(predictions, submitted_queries, strict=True)
+    ]
+    return score_evaluation(
+        probabilities,
+        requests=requests,
+        labels=labels,
+        selected_metrics=selected_metrics,
+        metrics=metrics,
+        calibration_bins=calibration_bins,
     )
