@@ -503,10 +503,10 @@ class Trainer:
                         "The final checkpoint will be saved in DCP format under %s.",
                         trainer.config.dump_folder,
                     )
-                if trainer.config.validator.enable:
+                if trainer.config.validator.is_enabled:
                     trainer.validator.validate(trainer.model_parts, trainer.step)
                 trainer.train()
-                if trainer.config.validator.enable and trainer.validator.should_validate(
+                if trainer.config.validator.is_enabled and trainer.validator.should_validate(
                     trainer.step
                 ):
                     trainer.validator.validate(trainer.model_parts, trainer.step)

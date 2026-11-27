@@ -208,7 +208,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
     validator.should_validate = lambda step: validator.last_step != step
     trainer = SimpleNamespace(
         step=0,
-        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(enable=True)),
+        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(is_enabled=True)),
         checkpointer=SimpleNamespace(load=restore),
         validator=validator,
         train=train,
@@ -312,7 +312,7 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
     model.to_hf.return_value = None if destination == "other-rank" else exported
     trainer = SimpleNamespace(
         step=0,
-        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(enable=False)),
+        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(is_enabled=False)),
         checkpointer=SimpleNamespace(load=Mock()),
         train=Mock(),
         model_parts=[model],

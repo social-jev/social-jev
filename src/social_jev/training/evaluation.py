@@ -253,6 +253,11 @@ class ValAndEvalOrchestrator(TitanValidator):
         evaluations: dict[str, OnlineEval] = field(default_factory=dict)
         eval_steps: int | None = 10
 
+        @property
+        def is_enabled(self) -> bool:
+            """Whether validation or online evaluation is configured."""
+            return self.enable
+
     def __init__(self, config, **runtime):
         self.tasks: list[Validation] = []
         if config.valset is not None:

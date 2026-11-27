@@ -186,7 +186,7 @@ def test_training_enables_benchmarks_without_a_validation_set(monkeypatch, tmp_p
     monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
     config = TrainConfig(steps=4, evaluations={"benchmark": benchmark(1)}, eval_steps=None)
     titan = TitanTrainer.from_checkpoint(tmp_path, config, list, None, "run")
-    assert titan.validator.enable
+    assert titan.validator.is_enabled
     assert titan.validator.evaluations == config.evaluations
     assert titan.validator.eval_steps is None
 
