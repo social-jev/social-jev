@@ -8,7 +8,7 @@ from ..types import Metrics, Query
 
 
 @dataclass(kw_only=True)
-class OnlineEvaluation:
+class OnlineEval:
     """Evaluate a reusable dataset or factory with the same inputs as evaluate()."""
 
     data: Iterable[dict] | Callable[[], Iterable[dict]]

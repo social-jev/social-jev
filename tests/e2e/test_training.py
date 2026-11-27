@@ -22,7 +22,7 @@ pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training import BrierLoss, CrossEntropy, FocalLoss, TrainConfig
-from social_jev.training.evaluation import ValAndEvalSchedule
+from social_jev.training.evaluation import ValAndEvalOrchestrator
 from social_jev.training.logging import Logger
 from social_jev.training.trainer import (
     TitanLoader,
@@ -93,9 +93,9 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device, dtype
     )
     loss_fn = Mock(wraps=BrierLoss())
     metrics = Mock()
-    validator = ValAndEvalSchedule.Config(
+    validator = ValAndEvalOrchestrator.Config(
         enable=True,
-        source=source,
+        valset=source,
         loss_function=loss_fn,
         val_steps=interval,
         total_steps=5,
@@ -110,9 +110,10 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device, dtype
         parallel_dims=SimpleNamespace(dp_enabled=False),
         metrics_processor=metrics,
     )
-    scheduled = [step for step in range(6) if validator.should_validate(step)]
-    assert scheduled == ([0, 5] if interval is None else [0, 2, 4, 5])
+    assert validator.should_validate(0)
     validator.validate([wrapped], 0)
+    scheduled = [step for step in range(6) if validator.should_validate(step)]
+    assert scheduled == ([5] if interval is None else [2, 4, 5])
     assert loss_fn.call_count == 1
     assert forward_dtypes == [dtype if device == "cuda" else torch.float32]
     assert loss_fn.call_args.args[0].dtype == torch.float32
@@ -204,6 +205,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
         validator.validate([model], 3)
 
     validator.validate = validate
+    validator.should_validate = lambda step: validator.last_step != step
     trainer = SimpleNamespace(
         step=0,
         config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(enable=True)),
@@ -376,7 +378,7 @@ def test_final_checkpoint_retains_optimizer_state(checkpoint, tmp_path, monkeypa
         loaded = SocialJev.from_pretrained(checkpoint)
         model.config = loaded.engine.model.config
         loader = TitanLoader(
-            TitanLoader.Config(source=source),
+            TitanLoader.Config(trainset=source),
             dp_rank=0,
             dp_world_size=1,
             tokenizer=SimpleNamespace(tokenizer=loaded.processor.tokenizer),
@@ -513,9 +515,9 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         model = ScoringModel()
         tokenizer = loaded.processor.tokenizer
         samples = [replace(next(source()), labels=[index % 2]) for index in range(count)]
-        config = ValAndEvalSchedule.Config(
+        config = ValAndEvalOrchestrator.Config(
             enable=True,
-            source=partial(iter, samples),
+            valset=partial(iter, samples),
             loss_function=CrossEntropy(),
             val_steps=None,
             total_steps=1,
@@ -554,7 +556,7 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         actual = metrics.log_validation.call_args.args[2]
         assert actual == pytest.approx(expected)
         assert model.training
-        assert validator.placeholder is None
+        assert all(task.placeholder is None for task in validator.tasks)
         (directory / f"rank-{rank}.json").write_text(json.dumps(forwards))
         loaded.stop()
     finally:

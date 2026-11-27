@@ -3,9 +3,11 @@
 import json
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import torch.distributed as dist
 from torchtitan.components.metrics import BaseLogger
 from torchtitan.tools.logging import logger
 
@@ -42,3 +44,24 @@ class Logger(BaseLogger):
         self.metrics_file.close()
         logger.removeHandler(self.file_handler)
         self.file_handler.close()
+
+
+def metadata_metrics(observations, prefix, group):
+    """Average detached losses for each metadata value."""
+    sums: Counter[tuple[str, str]] = Counter()
+    counts: Counter[tuple[str, str]] = Counter()
+    for losses, metadata in observations:
+        for loss, values in zip(losses.tolist(), metadata, strict=True):
+            for key_value in values.items():
+                sums[key_value] += loss
+                counts[key_value] += 1
+    if group is not None:
+        parts = [(Counter(), Counter()) for _ in range(dist.get_world_size(group))]
+        dist.all_gather_object(parts, (sums, counts), group=group)
+        sums = sum((item[0] for item in parts), Counter())
+        counts = sum((item[1] for item in parts), Counter())
+    return {
+        f"{prefix}/{name}/{value}/{metric}": result
+        for (name, value), count in counts.items()
+        for metric, result in (("loss", sums[name, value] / count), ("queries", count))
+    }

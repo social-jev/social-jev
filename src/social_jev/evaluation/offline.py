@@ -1,7 +1,7 @@
 """Evaluate datasets through the ordinary query API."""
 
 from ..metrics import accuracy
-from .common import (
+from .core import (
     create_eval_requests,
     get_named_metrics,
     score_evaluation,

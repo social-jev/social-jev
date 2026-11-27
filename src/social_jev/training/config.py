@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ..evaluation import OnlineEvaluation
+from ..evaluation import OnlineEval
 from .loss import FocalLoss, Loss
 from .lr_schedule import LRSchedule, WarmupStableDecay
 
@@ -34,7 +34,7 @@ class TrainConfig:
     """Log training metrics every this many optimizer updates."""
     val_steps: int | None = 10
     """Validate every this many updates, plus before and after training."""
-    evaluations: dict[str, OnlineEvaluation] = field(default_factory=dict)
+    evaluations: dict[str, OnlineEval] = field(default_factory=dict)
     """Named benchmarks using the same datasets and metrics as evaluate()."""
     eval_steps: int | None = 10
     """Evaluate benchmarks every this many updates, plus before and after training."""

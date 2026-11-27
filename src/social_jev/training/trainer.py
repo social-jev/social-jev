@@ -42,8 +42,8 @@ from transformers import AutoTokenizer
 from ..config import SocialJevConfig
 from ..data import SampleStep, packed_batches
 from ..transformers import SocialJevModel, is_dcp_checkpoint
-from .evaluation import ValAndEvalSchedule, metadata_metrics
-from .logging import Logger
+from .evaluation import ValAndEvalOrchestrator, autocast
+from .logging import Logger, metadata_metrics
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 from .lr_schedule import LRSchedule, WarmupStableDecay
 
@@ -88,7 +88,7 @@ class TitanLoader(BaseDataLoader):
 
     @dataclass(kw_only=True, slots=True)
     class Config(BaseDataLoader.Config):
-        source: Callable[[], Iterable[Sample]]
+        trainset: Callable[[], Iterable[Sample]]
         shuffle_buffer_size: int = 256
 
     def __init__(  # noqa: PLR0913 -- torch titan loader interface.
@@ -114,7 +114,7 @@ class TitanLoader(BaseDataLoader):
     def __iter__(self):
         batches = packed_batches(
             SampleStep(
-                self.config.source,
+                self.config.trainset,
                 self.rank,
                 self.world_size,
                 shuffle_buffer_size=self.config.shuffle_buffer_size,
@@ -315,15 +315,10 @@ class TitanTrainer(TorchTitanTrainer):
         for inputs, _targets in batches:
             batch = inputs["batch"].to(self.device)
             with self.train_context():
-                # the distributed wrapper handles mixed precision; on one gpu, use autocast
-                with torch.autocast(
-                    device_type=self.device.type,
-                    dtype=self.compute_dtype,
-                    enabled=(
-                        self.device.type == "cuda"
-                        and not self.parallel_dims.dp_enabled
-                        and self.compute_dtype != torch.float32
-                    ),
+                with autocast(
+                    self.device,
+                    self.compute_dtype,
+                    distributed=self.parallel_dims.dp_enabled,
                 ):
                     logits = model(batch)
                 logits = logits.float()
@@ -408,7 +403,7 @@ class TitanTrainer(TorchTitanTrainer):
             ),
             tokenizer=TitanTokenizer.Config(),
             dataloader=TitanLoader.Config(
-                source=trainset, shuffle_buffer_size=config.shuffle_buffer_size
+                trainset=trainset, shuffle_buffer_size=config.shuffle_buffer_size
             ),
             training=TrainingConfig(
                 steps=config.steps,
@@ -434,11 +429,11 @@ class TitanTrainer(TorchTitanTrainer):
                 warmup_steps=getattr(config.lr_schedule, "warmup_steps", 0),
             ),
             loss=CrossEntropyLoss.Config(),
-            validator=ValAndEvalSchedule.Config(
+            validator=ValAndEvalOrchestrator.Config(
                 enable=valset is not None or bool(config.evaluations),
                 evaluations=config.evaluations,
                 eval_steps=config.eval_steps,
-                source=valset,
+                valset=valset,
                 loss_function=config.loss_fn,
                 val_steps=config.val_steps,
                 total_steps=config.steps,
@@ -511,7 +506,9 @@ class Trainer:
                 if trainer.config.validator.enable:
                     trainer.validator.validate(trainer.model_parts, trainer.step)
                 trainer.train()
-                if trainer.config.validator.enable and trainer.validator.last_step != trainer.step:
+                if trainer.config.validator.enable and trainer.validator.should_validate(
+                    trainer.step
+                ):
                     trainer.validator.validate(trainer.model_parts, trainer.step)
                 if final_save_to is not None:
                     trained = trainer.model_parts[0].to_hf(trainer.tokenizer.tokenizer)

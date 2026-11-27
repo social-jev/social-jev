@@ -9,14 +9,14 @@ import torch
 
 from social_jev import Query, Request, SocialJev
 from social_jev.data import Processor
-from social_jev.evaluation import OnlineEvaluation
+from social_jev.evaluation import OnlineEval
 from social_jev.metrics import accuracy
 
 pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training import CrossEntropy, TrainConfig
-from social_jev.training.evaluation import EvaluationRunner, ValAndEvalSchedule
+from social_jev.training.evaluation import ValAndEvalOrchestrator
 from social_jev.training.trainer import TitanTrainer
 
 
@@ -51,21 +51,21 @@ def order_score(probabilities, _labels):
 
 
 def benchmark(count):
-    return OnlineEvaluation(
+    return OnlineEval(
         data=[{"state": "S", "label": [i % 2, [0.2, 0.3, 0.5]]} for i in range(count)],
         queries=[Query(text="Q", options=["A", "B"]), Query(text="R", options=["A", "B", "C"])],
         metrics={"accuracy": accuracy, "queries": query_count},
     )
 
 
-def schedule(tokenizer, evaluation, metrics, *, valset=None, group=None):
+def orchestrator(tokenizer, evaluation, metrics, *, valset=None, group=None):
     dimensions = SimpleNamespace(
         dp_enabled=group is not None,
         get_mesh=lambda _name: SimpleNamespace(get_group=lambda: group),
     )
-    return ValAndEvalSchedule.Config(
+    return ValAndEvalOrchestrator.Config(
         enable=True,
-        source=valset,
+        valset=valset,
         loss_function=CrossEntropy(),
         val_steps=2,
         evaluations={"benchmark": evaluation},
@@ -98,9 +98,11 @@ def test_benchmarks_run_at_their_own_interval_and_match_evaluate(checkpoint):
     validation = Sample.from_request(Request(state="S", queries=evaluation.queries))
     validation.labels = [1, 2]
     metrics = Mock()
-    validator = schedule(tokenizer, evaluation, metrics, valset=lambda: [validation])
-    assert [step for step in range(6) if validator.should_validate(step)] == [0, 2, 3, 4, 5]
-    for step in (0, 2, 3, 4, 5, 5):
+    validator = orchestrator(tokenizer, evaluation, metrics, valset=lambda: [validation])
+    assert validator.should_validate(0)
+    validator.validate([model], 0)
+    assert [step for step in range(6) if validator.should_validate(step)] == [2, 3, 4, 5]
+    for step in (2, 3, 4, 5, 5):
         validator.validate([model], step)
     assert [call.args[1] for call in metrics.log_validation.call_args_list] == [0, 2, 4, 5]
     assert [call.args[1] for call in metrics.logger.log.call_args_list] == [0, 3, 5]
@@ -108,7 +110,7 @@ def test_benchmarks_run_at_their_own_interval_and_match_evaluate(checkpoint):
         assert call.args[0] == {
             "evaluation_metrics/benchmark/accuracy": offline.scores["accuracy"],
             "evaluation_metrics/benchmark/queries": 6,
-            "evaluation_metrics/benchmark/calibration/ece": offline.calibration.ece,
+            "evaluation_metrics/benchmark/ece": offline.calibration.ece,
         }
     assert model.training
     loaded.stop()
@@ -126,7 +128,7 @@ def run_distributed_benchmark(rank, checkpoint, directory, count):
         loaded = SocialJev.from_pretrained(checkpoint)
         model = OptionTokenModel()
         metrics = Mock()
-        evaluation = OnlineEvaluation(
+        evaluation = OnlineEval(
             data=[
                 {"state": "S", "query": "Q", "options": options, "label": index % len(options)}
                 for index, options in enumerate([["A", "B"], ["B", "A"], ["C", "A", "B"]][:count])
@@ -138,7 +140,7 @@ def run_distributed_benchmark(rank, checkpoint, directory, count):
             queries=evaluation.queries,
             metrics=evaluation.metrics,
         )
-        validator = schedule(
+        validator = orchestrator(
             loaded.processor.tokenizer,
             evaluation,
             metrics,
@@ -158,14 +160,12 @@ def run_distributed_benchmark(rank, checkpoint, directory, count):
             assert values["evaluation_metrics/benchmark/accuracy"] == expected.scores["accuracy"]
             assert values["evaluation_metrics/benchmark/queries"] == count
             assert values["evaluation_metrics/benchmark/order"] == expected.scores["order"]
-            assert (
-                values["evaluation_metrics/benchmark/calibration/ece"] == expected.calibration.ece
-            )
+            assert values["evaluation_metrics/benchmark/ece"] == expected.calibration.ece
         else:
             metrics.logger.log.assert_not_called()
         (directory / f"rank-{rank}.json").write_text(json.dumps(forwards))
         assert model.training
-        assert validator.placeholder is None
+        assert all(task.placeholder is None for task in validator.tasks)
         loaded.stop()
     finally:
         torch.distributed.destroy_process_group()
@@ -193,12 +193,12 @@ def test_training_enables_benchmarks_without_a_validation_set(monkeypatch, tmp_p
 
 def test_online_evaluation_rejects_partial_benchmark_scores(checkpoint):
     loaded = SocialJev.from_pretrained(checkpoint)
-    evaluation = OnlineEvaluation(
+    evaluation = OnlineEval(
         data=[{"state": "S " * 100, "label": 0}],
         queries=Query(text="Q", options=["A", "B"]),
     )
     metrics = Mock()
-    validator = schedule(loaded.processor.tokenizer, evaluation, metrics)
+    validator = orchestrator(loaded.processor.tokenizer, evaluation, metrics)
     model = OptionTokenModel()
     with (
         pytest.warns(UserWarning, match="Skipped a query"),
@@ -210,9 +210,9 @@ def test_online_evaluation_rejects_partial_benchmark_scores(checkpoint):
     loaded.stop()
 
 
-def test_online_dataset_factory_preserves_query_labels_and_metric_selection():
+def test_online_dataset_factory_preserves_query_labels_and_metric_selection(checkpoint):
     rows = [{"state": "A", "label": [1, [0.75, 0.25]], "metrics": ["accuracy"]}]
-    benchmark = OnlineEvaluation(
+    benchmark = OnlineEval(
         data=lambda: iter(rows),
         queries=[
             Query(text="First?", options=["yes", "no"]),
@@ -220,12 +220,19 @@ def test_online_dataset_factory_preserves_query_labels_and_metric_selection():
         ],
         metrics={"accuracy": accuracy},
     )
-    first = EvaluationRunner("benchmark", benchmark, None, Mock())
-    second = EvaluationRunner("benchmark", benchmark, None, Mock())
-    assert first.requests == second.requests
-    assert first.labels == second.labels
-    assert first.selected_metrics == second.selected_metrics
-    requests, labels, selected_metrics = first.requests, first.labels, first.selected_metrics
+    loaded = SocialJev.from_pretrained(checkpoint)
+    evaluation = orchestrator(loaded.processor.tokenizer, benchmark, Mock()).tasks[0]
+    evaluation.reset_results()
+    requests, labels, selected_metrics = (
+        evaluation.requests,
+        evaluation.labels,
+        evaluation.selected_metrics,
+    )
+    evaluation.reset_results()
+    assert evaluation.requests == requests
+    assert evaluation.labels == labels
+    assert evaluation.selected_metrics == selected_metrics
+    loaded.stop()
     assert requests[0].state == "A"
     assert [query.text for query in requests[0].queries] == ["First?", "Second?"]
     assert labels == [1, [0.75, 0.25]]

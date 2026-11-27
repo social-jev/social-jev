@@ -2,9 +2,9 @@
 
 import pytest
 
-from social_jev.evaluation import OnlineEvaluation
+from social_jev.evaluation import OnlineEval
 
 
 def test_online_evaluation_requires_repeatable_data():
     with pytest.raises(TypeError, match="fresh iterator"):
-        OnlineEvaluation(data=iter([{"state": "A", "label": 0}]))
+        OnlineEval(data=iter([{"state": "A", "label": 0}]))
