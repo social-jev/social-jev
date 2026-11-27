@@ -182,10 +182,10 @@ def test_online_evaluation_partitions_data_and_excludes_placeholder_scores(
     assert calls == [[2.0] * ((count + 1) // 2)] * 2
 
 
-def test_training_enables_benchmarks_without_a_validation_set(monkeypatch):
+def test_training_enables_benchmarks_without_a_validation_set(monkeypatch, tmp_path):
     monkeypatch.setattr(TitanTrainer.Config, "build", lambda self: self)
     config = TrainConfig(steps=4, evaluations={"benchmark": benchmark(1)}, eval_steps=None)
-    titan = TitanTrainer.from_checkpoint("model", config, list, None, "run")
+    titan = TitanTrainer.from_checkpoint(tmp_path, config, list, None, "run")
     assert titan.validator.enable
     assert titan.validator.evaluations == config.evaluations
     assert titan.validator.eval_steps is None
