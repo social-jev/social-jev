@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from ..metrics import accuracy
 from ..types import Metrics, Query
-from .common import create_eval_requests, get_named_metrics, validate_calibration_bins
 
 
 @dataclass(kw_only=True)
@@ -18,17 +17,12 @@ class OnlineEvaluation:
     calibration_bins: int = 10
 
     def __post_init__(self):
-        validate_calibration_bins(self.calibration_bins)
+        if type(self.calibration_bins) is not int or self.calibration_bins < 1:
+            message = "calibration_bins must be a positive integer."
+            raise ValueError(message)
         if isinstance(self.data, Iterator):
             message = (
                 "Online evaluation needs a reusable dataset "
                 "or a callable returning a fresh iterator."
             )
             raise TypeError(message)
-
-    def prepare(self):
-        """Build ordered requests, labels, and metric selections for this evaluation."""
-        data = self.data() if callable(self.data) else self.data
-        return create_eval_requests(
-            data, queries=self.queries, metric_names=get_named_metrics(self.metrics)
-        )

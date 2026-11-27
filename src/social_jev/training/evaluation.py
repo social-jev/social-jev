@@ -13,7 +13,7 @@ from torchtitan.tools.logging import logger
 
 from ..data import Sample, SampleStep, packed_batches
 from ..evaluation import OnlineEvaluation  # noqa: TC001 -- runtime configuration field type.
-from ..evaluation.common import score_evaluation
+from ..evaluation.common import create_eval_requests, get_named_metrics, score_evaluation
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 
 if TYPE_CHECKING:
@@ -59,7 +59,12 @@ class EvaluationRunner:
         self.evaluation = evaluation
         self.group = group
         self.metrics_processor = metrics_processor
-        self.requests, self.labels, self.selected_metrics = evaluation.prepare()
+        data = evaluation.data() if callable(evaluation.data) else evaluation.data
+        self.requests, self.labels, self.selected_metrics = create_eval_requests(
+            data,
+            queries=evaluation.queries,
+            metric_names=get_named_metrics(evaluation.metrics),
+        )
         self.predictions = []
 
     def source(self):

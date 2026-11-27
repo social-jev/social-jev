@@ -165,10 +165,3 @@ def score_evaluation(  # noqa: PLR0913 -- shared evaluation inputs.
         labels=labels,
         calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
     )
-
-
-def validate_calibration_bins(calibration_bins):
-    """Require a positive number of confidence bins."""
-    if type(calibration_bins) is not int or calibration_bins < 1:
-        message = "calibration_bins must be a positive integer."
-        raise ValueError(message)

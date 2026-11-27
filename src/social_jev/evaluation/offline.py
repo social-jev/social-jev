@@ -5,13 +5,15 @@ from .common import (
     create_eval_requests,
     get_named_metrics,
     score_evaluation,
-    validate_calibration_bins,
 )
 
 
 def evaluate(model, *, data, queries=None, metrics=accuracy, calibration_bins=10):
     """Submit the dataset and score its ordered predictions."""
-    validate_calibration_bins(calibration_bins)
+    if type(calibration_bins) is not int or calibration_bins < 1:
+        message = "calibration_bins must be a positive integer."
+        raise ValueError(message)
+
     requests, labels, selected_metrics = create_eval_requests(
         data, queries=queries, metric_names=get_named_metrics(metrics)
     )

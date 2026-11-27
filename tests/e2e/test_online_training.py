@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from social_jev import Query, SocialJev
+from social_jev import Query, Request, SocialJev
 from social_jev.data import Processor
 from social_jev.evaluation import OnlineEvaluation
 from social_jev.metrics import accuracy
@@ -16,7 +16,7 @@ pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training import CrossEntropy, TrainConfig
-from social_jev.training.evaluation import ValAndEvalSchedule
+from social_jev.training.evaluation import EvaluationRunner, ValAndEvalSchedule
 from social_jev.training.trainer import TitanTrainer
 
 
@@ -94,8 +94,8 @@ def test_benchmarks_run_at_their_own_interval_and_match_evaluate(checkpoint):
         queries=evaluation.queries,
         metrics=evaluation.metrics,
     )
-    requests, _, _ = evaluation.prepare()
-    validation = Sample.from_request(requests[0])
+    assert isinstance(evaluation.queries, list)
+    validation = Sample.from_request(Request(state="S", queries=evaluation.queries))
     validation.labels = [1, 2]
     metrics = Mock()
     validator = schedule(tokenizer, evaluation, metrics, valset=lambda: [validation])
@@ -208,3 +208,25 @@ def test_online_evaluation_rejects_partial_benchmark_scores(checkpoint):
     metrics.logger.log.assert_not_called()
     assert model.training
     loaded.stop()
+
+
+def test_online_dataset_factory_preserves_query_labels_and_metric_selection():
+    rows = [{"state": "A", "label": [1, [0.75, 0.25]], "metrics": ["accuracy"]}]
+    benchmark = OnlineEvaluation(
+        data=lambda: iter(rows),
+        queries=[
+            Query(text="First?", options=["yes", "no"]),
+            Query(text="Second?", options=["a", "b"]),
+        ],
+        metrics={"accuracy": accuracy},
+    )
+    first = EvaluationRunner("benchmark", benchmark, None, Mock())
+    second = EvaluationRunner("benchmark", benchmark, None, Mock())
+    assert first.requests == second.requests
+    assert first.labels == second.labels
+    assert first.selected_metrics == second.selected_metrics
+    requests, labels, selected_metrics = first.requests, first.labels, first.selected_metrics
+    assert requests[0].state == "A"
+    assert [query.text for query in requests[0].queries] == ["First?", "Second?"]
+    assert labels == [1, [0.75, 0.25]]
+    assert selected_metrics == [["accuracy"], ["accuracy"]]
