@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import socket
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -31,7 +30,6 @@ from torchtitan.components.metrics import MetricsProcessor
 from torchtitan.components.optimizer import LRSchedulersContainer, OptimizersContainer
 from torchtitan.components.optimizer.optimizer import ParamGroupConfig
 from torchtitan.components.tokenizer import BaseTokenizer
-from torchtitan.components.validate import Validator
 from torchtitan.config import Configurable, ParallelismConfig, TrainingConfig
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.distributed.fsdp import disable_fsdp_gradient_division
@@ -44,6 +42,7 @@ from transformers import AutoTokenizer
 from ..config import SocialJevConfig
 from ..data import SampleStep, packed_batches
 from ..transformers import SocialJevModel, is_dcp_checkpoint
+from .evaluation import ValAndEvalSchedule, metadata_metrics
 from .logging import Logger
 from .loss import Loss  # noqa: TC001 -- runtime configuration field type.
 from .lr_schedule import LRSchedule, WarmupStableDecay
@@ -435,8 +434,10 @@ class TitanTrainer(TorchTitanTrainer):
                 warmup_steps=getattr(config.lr_schedule, "warmup_steps", 0),
             ),
             loss=CrossEntropyLoss.Config(),
-            validator=Validation.Config(
-                enable=valset is not None,
+            validator=ValAndEvalSchedule.Config(
+                enable=valset is not None or bool(config.evaluations),
+                evaluations=config.evaluations,
+                eval_steps=config.eval_steps,
                 source=valset,
                 loss_function=config.loss_fn,
                 val_steps=config.val_steps,
@@ -444,149 +445,6 @@ class TitanTrainer(TorchTitanTrainer):
                 compute_dtype=getattr(torch, config.dtype),
             ),
         ).build()
-
-
-class Validation(Validator):
-    """Evaluate packed queries without modifying the model weights."""
-
-    @dataclass(kw_only=True, slots=True)
-    class Config(Validator.Config):
-        source: Callable[[], Iterable[Sample]] | None
-        loss_function: Loss
-        val_steps: int | None
-        total_steps: int
-        compute_dtype: torch.dtype = torch.bfloat16
-
-    def __init__(  # noqa: PLR0913 -- torch titan validator interface.
-        self,
-        config,
-        *,
-        dp_world_size,
-        dp_rank,
-        tokenizer,
-        parallel_dims,
-        metrics_processor,
-        seq_len,
-        local_batch_size,
-        **kwargs,
-    ):
-        del kwargs
-        self.config: Validation.Config = config
-        self.last_step: int | None = None
-        self.dp_rank = dp_rank
-        self.dp_world_size = dp_world_size
-        self.group = parallel_dims.get_mesh("batch").get_group() if dp_world_size > 1 else None
-        self.placeholder = None
-        self.parallel_dims = parallel_dims
-        self.loss = config.loss_function
-        self.compute_dtype = config.compute_dtype
-        self.seq_len = seq_len
-        self.local_batch_size = local_batch_size
-        self.tokenizer: PreTrainedTokenizerBase = tokenizer.tokenizer
-        self.metrics_processor = metrics_processor
-
-    def should_validate(self, step):
-        """Validate at step zero, the requested intervals, and the final update."""
-        return step in (0, self.config.total_steps) or (
-            self.config.val_steps is not None and step % self.config.val_steps == 0
-        )
-
-    def if_exhausted_fill_placeholder(self, batch):
-        """Keep exhausted ranks participating until every rank finishes."""
-        if self.group is None:
-            return batch
-        available = torch.tensor([batch is not None], dtype=torch.int64, device=self.device)
-        availability = torch.empty(self.dp_world_size, dtype=torch.int64, device=self.device)
-        dist.all_gather_into_tensor(availability, available, group=self.group)
-        active_ranks = availability.nonzero().flatten()
-        if active_ranks.numel() == 0:
-            return None
-        if self.placeholder is None:
-            # share one real cpu batch, including with ranks that have no samples
-            source_rank = int(active_ranks[0].item())
-            shared = [batch if self.dp_rank == source_rank else None]
-            dist.broadcast_object_list(
-                shared,
-                src=dist.get_global_rank(self.group, source_rank),
-                group=self.group,
-            )
-            self.placeholder = shared[0]
-        return self.placeholder if batch is None else batch
-
-    @torch.no_grad()
-    def validate(self, model_parts, step):
-        """Evaluate disjoint samples and combine losses across ranks."""
-        model = model_parts[0].eval()
-        self.device = model.device
-        self.placeholder = None
-        source = self.config.source
-        assert source is not None
-        batches = packed_batches(
-            SampleStep(source, self.dp_rank, self.dp_world_size, infinite=False),
-            self.tokenizer,
-            seq_len=self.seq_len,
-            local_batch_size=self.local_batch_size,
-        )
-        totals = torch.zeros(2, dtype=torch.float64, device=self.device)
-        observations = []
-        try:
-            while True:
-                batch = batches.next()
-                exhausted = batch is None
-                batch = self.if_exhausted_fill_placeholder(batch)
-                if batch is None:
-                    break
-                batch = batch.to(self.device)
-                # the distributed wrapper handles mixed precision; on one gpu, use autocast
-                with torch.autocast(
-                    device_type=self.device.type,
-                    dtype=self.compute_dtype,
-                    enabled=(
-                        self.device.type == "cuda"
-                        and not self.parallel_dims.dp_enabled
-                        and self.compute_dtype != torch.float32
-                    ),
-                ):
-                    logits = model(batch)
-                if exhausted:
-                    continue
-                labels = batch.labels
-                assert labels is not None
-                losses = self.loss(logits.float(), labels, batch.option_mask)
-                totals[0] += losses.double().sum()
-                totals[1] += losses.numel()
-                observations.append((losses.cpu(), batch.metadata))
-            if self.group is not None:
-                dist.all_reduce(totals, group=self.group)
-            categories = metadata_metrics(observations, "validation_metrics", self.group)
-            if totals[1].item():
-                mean = (totals[0] / totals[1]).item()
-                self.metrics_processor.log_validation(mean, step, categories)
-            self.last_step = step
-        finally:
-            self.placeholder = None
-            model.train()
-
-
-def metadata_metrics(observations, prefix, group):
-    """Average detached losses for each metadata value."""
-    sums: Counter[tuple[str, str]] = Counter()
-    counts: Counter[tuple[str, str]] = Counter()
-    for losses, metadata in observations:
-        for loss, values in zip(losses.tolist(), metadata, strict=True):
-            for key_value in values.items():
-                sums[key_value] += loss
-                counts[key_value] += 1
-    if group is not None:
-        parts = [(Counter(), Counter()) for _ in range(dist.get_world_size(group))]
-        dist.all_gather_object(parts, (sums, counts), group=group)
-        sums = sum((item[0] for item in parts), Counter())
-        counts = sum((item[1] for item in parts), Counter())
-    return {
-        f"{prefix}/{name}/{value}/{metric}": result
-        for (name, value), count in counts.items()
-        for metric, result in (("loss", sums[name, value] / count), ("queries", count))
-    }
 
 
 class Trainer:
@@ -650,10 +508,10 @@ class Trainer:
                         "The final checkpoint will be saved in DCP format under %s.",
                         trainer.config.dump_folder,
                     )
-                if self.valset is not None:
+                if trainer.config.validator.enable:
                     trainer.validator.validate(trainer.model_parts, trainer.step)
                 trainer.train()
-                if self.valset is not None and trainer.validator.last_step != trainer.step:
+                if trainer.config.validator.enable and trainer.validator.last_step != trainer.step:
                     trainer.validator.validate(trainer.model_parts, trainer.step)
                 if final_save_to is not None:
                     trained = trainer.model_parts[0].to_hf(trainer.tokenizer.tokenizer)

@@ -34,6 +34,9 @@ class Sample:
     metadata: dict[str, str] = field(default_factory=dict)
     """Caller-supplied categories for reporting."""
 
+    query_ids: list[int] = field(default_factory=list)
+    """Original query positions used to restore evaluation order after packing."""
+
     def __post_init__(self):  # noqa: C901 -- keep the label contract together.
         """Check that supplied labels match the query options."""
         if self.labels is None:
@@ -86,6 +89,9 @@ class TokenizedSample:
     metadata: list[dict[str, str]] = field(default_factory=list)
     """Reporting categories for each query."""
 
+    query_ids: list[int] = field(default_factory=list)
+    """Original query positions aligned with query messages."""
+
     @classmethod
     def from_sample(cls, sample: Sample, tokenizer: PreTrainedTokenizerBase) -> TokenizedSample:
         """Apply the checkpoint template once to the complete message list."""
@@ -109,6 +115,7 @@ class TokenizedSample:
             roles,
             sample.labels,
             [sample.metadata] * roles.count("query"),
+            sample.query_ids,
         )
 
     def __len__(self) -> int:
@@ -128,6 +135,7 @@ class TokenizedSample:
             roles=self.roles[start:stop],
             labels=None if self.labels is None else self.labels[queries],
             metadata=self.metadata[queries],
+            query_ids=self.query_ids[queries],
         )
 
     def __add__(self, other: TokenizedSample) -> TokenizedSample:
@@ -143,6 +151,7 @@ class TokenizedSample:
             roles=self.roles + other.roles,
             labels=labels,
             metadata=self.metadata + other.metadata,
+            query_ids=self.query_ids + other.query_ids,
         )
 
     def split(  # noqa: C901 -- two explicit split modes, sharing message slicing.
@@ -245,6 +254,8 @@ class PackedBatch:
     option_indices: torch.Tensor
     option_positions: torch.Tensor
     labels: OptionLabels | None
+    query_ids: list[int] = field(default_factory=list)
+    """Original query positions aligned with the option rows."""
 
     @classmethod
     def from_samples(cls, samples: list[TokenizedSample]) -> PackedBatch:  # noqa: C901 -- collate aligned options and labels together.
@@ -280,6 +291,7 @@ class PackedBatch:
             message_boundaries=[sample.message_boundaries for sample in samples],
             roles=[sample.roles for sample in samples],
             metadata=[values for sample in samples for values in sample.metadata],
+            query_ids=[index for sample in samples for index in sample.query_ids],
             option_indices=pad_sequence(
                 [torch.tensor(group) for group in groups],
                 batch_first=True,

@@ -3,7 +3,17 @@
 from collections.abc import Sequence
 from statistics import fmean
 
-from .types import CalibrationBin, CalibrationMetrics, Metric, Metrics, Query, QueryLabel, Request
+from ..types import (
+    CalibrationBin,
+    CalibrationMetrics,
+    EvaluationResult,
+    Metric,
+    Metrics,
+    Query,
+    QueryLabel,
+    Request,
+    Result,
+)
 
 
 def get_named_metrics(metrics: Metrics) -> dict[str, Metric]:
@@ -127,3 +137,38 @@ def compute_calibration(
         ece=round(weighted_error / observations, 2) if observations else None,
         bins=bin_measurements,
     )
+
+
+def score_evaluation(  # noqa: PLR0913 -- shared evaluation inputs.
+    probabilities, *, requests, labels, selected_metrics, metrics, calibration_bins
+):
+    """Score ordered query probabilities identically online and offline."""
+    queries = [query for request in requests for query in request.queries]
+    predictions = [
+        Result(
+            choice=query.options[max(range(len(values)), key=values.__getitem__)],
+            probabilities=dict(zip(query.options, values, strict=True)),
+        )
+        for query, values in zip(queries, probabilities, strict=True)
+    ]
+    scores = {}
+    for name, metric in get_named_metrics(metrics).items():
+        indices = [index for index, names in enumerate(selected_metrics) if name in names]
+        if indices:
+            scores[name] = metric(
+                [probabilities[index] for index in indices],
+                [labels[index] for index in indices],
+            )
+    return EvaluationResult(
+        scores=scores,
+        predictions=predictions,
+        labels=labels,
+        calibration=compute_calibration(probabilities, labels, bins=calibration_bins),
+    )
+
+
+def validate_calibration_bins(calibration_bins):
+    """Require a positive number of confidence bins."""
+    if type(calibration_bins) is not int or calibration_bins < 1:
+        message = "calibration_bins must be a positive integer."
+        raise ValueError(message)

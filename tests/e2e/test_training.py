@@ -22,13 +22,13 @@ pytest.importorskip("torchtitan")
 pytest.importorskip("triton")
 
 from social_jev.training import BrierLoss, CrossEntropy, FocalLoss, TrainConfig
+from social_jev.training.evaluation import ValAndEvalSchedule
 from social_jev.training.logging import Logger
 from social_jev.training.trainer import (
     TitanLoader,
     TitanModel,
     TitanTrainer,
     Trainer,
-    Validation,
 )
 
 
@@ -93,7 +93,7 @@ def test_validation_schedule_and_custom_loss(checkpoint, interval, device, dtype
     )
     loss_fn = Mock(wraps=BrierLoss())
     metrics = Mock()
-    validator = Validation.Config(
+    validator = ValAndEvalSchedule.Config(
         enable=True,
         source=source,
         loss_function=loss_fn,
@@ -206,7 +206,7 @@ def test_run_validates_before_training_and_once_at_end(checkpoint, monkeypatch):
     validator.validate = validate
     trainer = SimpleNamespace(
         step=0,
-        config=SimpleNamespace(dump_folder="run"),
+        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(enable=True)),
         checkpointer=SimpleNamespace(load=restore),
         validator=validator,
         train=train,
@@ -310,7 +310,7 @@ def test_training_saves_requested_destination_and_cleans_up(tmp_path, monkeypatc
     model.to_hf.return_value = None if destination == "other-rank" else exported
     trainer = SimpleNamespace(
         step=0,
-        config=SimpleNamespace(dump_folder="run"),
+        config=SimpleNamespace(dump_folder="run", validator=SimpleNamespace(enable=False)),
         checkpointer=SimpleNamespace(load=Mock()),
         train=Mock(),
         model_parts=[model],
@@ -513,7 +513,7 @@ def run_partitioned_validation(rank, checkpoint, directory, count):
         model = ScoringModel()
         tokenizer = loaded.processor.tokenizer
         samples = [replace(next(source()), labels=[index % 2]) for index in range(count)]
-        config = Validation.Config(
+        config = ValAndEvalSchedule.Config(
             enable=True,
             source=partial(iter, samples),
             loss_function=CrossEntropy(),

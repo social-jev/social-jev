@@ -154,3 +154,48 @@ result = results[0][0]
 print(result.choice)
 print(result.probabilities)
 ```
+
+
+## Benchmarks during training
+
+Use `OnlineEvaluation` to track held-out benchmark metrics on the current training
+weights. Its `data`, `queries`, `metrics`, and `calibration_bins` arguments match
+`model.evaluate()`. Supply a reusable dataset (such as a list or Hugging Face
+Dataset), or a callable returning a fresh iterator for each evaluation.
+
+```python
+from social_jev import Query, SocialJev
+from social_jev.evaluation import OnlineEvaluation
+from social_jev.metrics import accuracy
+from social_jev.training import TrainConfig
+
+benchmark = OnlineEvaluation(
+    data=[{"state": "The proposal increases bus funding.", "label": 0}],
+    queries=Query(text="Policy area?", options=["Transport", "Education"]),
+    metrics={"accuracy": accuracy},
+)
+
+SocialJev.train(
+    repo="social-jev/model",  # replace with your checkpoint
+    trainset=trainset,  # callable returning your training Samples
+    config=TrainConfig(
+        steps=100,
+        evaluations={"policy": benchmark},
+        eval_steps=10,
+    ),
+)
+```
+
+Benchmarks run before training, every `eval_steps` updates, and after training.
+`eval_steps=None` runs only before and after. Validation loss still uses `valset`
+and its separate `val_steps` interval. Evaluation also works without `valset`.
+
+Each DP rank scores a disjoint subset; exhausted ranks participate with placeholder
+forwards whose outputs are excluded. Predictions are restored to dataset order
+before computing the same metrics and calibration as standalone evaluation.
+An evaluation fails if the sequence limit would omit benchmark queries.
+
+Scores appear in TorchTitan terminal logs and in the run's `metrics.jsonl` under
+`evaluation_metrics/policy/accuracy` and
+`evaluation_metrics/policy/calibration/ece`. Only rank zero computes and logs the
+benchmark metrics. No inference server or second model is created.

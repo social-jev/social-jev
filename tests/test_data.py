@@ -52,6 +52,7 @@ def tokenized(lengths, roles, labels=None):
         roles=roles,
         labels=labels,
         metadata=[{"task": str(index)} for index in range(count)],
+        query_ids=list(range(count)),
     )
 
 
@@ -97,6 +98,7 @@ def test_query_split_preserves_tokens_labels_and_metadata():
     rows = list(iter(split.next, None))
     assert [row.ids for row in rows] == [[0, 1, 2, 3, 4], [0, 1, 5, 6, 7]]
     assert [row.labels for row in rows] == [[0], [[0.25, 0.75]]]
+    assert [row.query_ids for row in rows] == [[0], [1]]
     assert [row.metadata for row in rows] == [[{"task": "0"}], [{"task": "1"}]]
     assert all(row.message_boundaries == [1, 2, 3, 4] for row in rows)
 
@@ -163,6 +165,7 @@ def test_collation_aligns_labels_and_positions_including_partial_batch():
     batch = batches.next()
     assert batch is not None
     assert batch.input_ids.shape == (2, 6)
+    assert batch.query_ids == [0, 0]
     torch.testing.assert_close(batch.labels, torch.tensor([[0.2, 0.3, 0.5], [0, 1, 0]]))
     assert batch.option_indices.tolist() == [[0, 1, 2], [3, 4, -1]]
     assert Positions(batch).value.tolist() == [[0, 1, 2, 3, 3, 3], [0, 1, 2, 3, 3, 0]]
